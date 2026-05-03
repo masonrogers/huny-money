@@ -41,6 +41,12 @@ services:
       - key: CRON_SECRET
         scope: RUN_TIME
         type: SECRET
+      - key: APP_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: ADMIN_PASSWORD
+        scope: RUN_TIME
+        type: SECRET
 
 databases:
   - name: db

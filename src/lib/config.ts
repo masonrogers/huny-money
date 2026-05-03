@@ -6,6 +6,8 @@ const envSchema = z.object({
   COINBASE_API_SECRET: z.string().min(1, 'COINBASE_API_SECRET is required'),
   ANTHROPIC_API_KEY: z.string().min(1, 'ANTHROPIC_API_KEY is required'),
   CRON_SECRET: z.string().min(1, 'CRON_SECRET is required'),
+  APP_SECRET: z.string().min(1, 'APP_SECRET is required'),
+  ADMIN_PASSWORD: z.string().min(1, 'ADMIN_PASSWORD is required'),
   ALERT_WEBHOOK_URL: z.string().optional(),
   NEXT_PUBLIC_APP_URL: z.string().optional(),
 });
@@ -37,6 +39,8 @@ function loadConfig(): EnvConfig {
         COINBASE_API_SECRET: process.env.COINBASE_API_SECRET ?? '',
         ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? '',
         CRON_SECRET: process.env.CRON_SECRET ?? '',
+        APP_SECRET: process.env.APP_SECRET ?? '',
+        ADMIN_PASSWORD: process.env.ADMIN_PASSWORD ?? '',
         ALERT_WEBHOOK_URL: process.env.ALERT_WEBHOOK_URL,
         NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
       };

@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useCallback } from "react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: "■" },
@@ -16,6 +17,13 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  const handleLogout = useCallback(async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/login");
+    router.refresh();
+  }, [router]);
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-56 bg-gray-950 border-r border-gray-800 flex flex-col z-20">
@@ -47,8 +55,15 @@ export function Sidebar() {
           );
         })}
       </nav>
-      <div className="px-4 py-3 border-t border-gray-800 text-xs text-gray-500">
-        v0.1.0
+      <div className="px-3 py-3 border-t border-gray-800 space-y-2">
+        <button
+          onClick={handleLogout}
+          className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-400 hover:bg-gray-800/60 hover:text-gray-200 transition-colors w-full"
+        >
+          <span className="text-base w-5 text-center">&#x2192;</span>
+          Logout
+        </button>
+        <div className="text-xs text-gray-500 px-3">v0.1.0</div>
       </div>
     </aside>
   );

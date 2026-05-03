@@ -42,10 +42,9 @@ SPEC_JSON=$(jq -n \
       region: "nyc",
       services: [{
         name: "web",
-        github: {
-          repo: "masonrogers/huny-money",
-          branch: "main",
-          deploy_on_push: true
+        git: {
+          repo_clone_url: "https://github.com/masonrogers/huny-money.git",
+          branch: "main"
         },
         build_command: "npm run build",
         run_command: "npm start",
@@ -67,7 +66,8 @@ SPEC_JSON=$(jq -n \
           { key: "COINBASE_API_KEY", value: "placeholder", scope: "RUN_TIME", type: "SECRET" },
           { key: "COINBASE_API_SECRET", value: "placeholder", scope: "RUN_TIME", type: "SECRET" },
           { key: "ANTHROPIC_API_KEY", value: $anthropic_key, scope: "RUN_TIME", type: "SECRET" },
-          { key: "CRON_SECRET", value: $cron_secret, scope: "RUN_TIME", type: "SECRET" }
+          { key: "CRON_SECRET", value: $cron_secret, scope: "RUN_TIME", type: "SECRET" },
+          { key: "NPM_CONFIG_PRODUCTION", value: "false", scope: "BUILD_TIME" }
         ]
       }],
       databases: [{
