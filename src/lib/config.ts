@@ -12,7 +12,11 @@ const envSchema = z.object({
 
 type EnvConfig = z.infer<typeof envSchema>;
 
+let _cached: EnvConfig | null = null;
+
 function loadConfig(): EnvConfig {
+  if (_cached) return _cached;
+
   const result = envSchema.safeParse(process.env);
 
   if (!result.success) {
@@ -27,7 +31,7 @@ function loadConfig(): EnvConfig {
           'Continuing in development mode with defaults where possible.'
       );
       // Return partial config with empty strings for missing required values in dev
-      return {
+      const fallback: EnvConfig = {
         DATABASE_URL: process.env.DATABASE_URL ?? '',
         COINBASE_API_KEY: process.env.COINBASE_API_KEY ?? '',
         COINBASE_API_SECRET: process.env.COINBASE_API_SECRET ?? '',
@@ -36,6 +40,8 @@ function loadConfig(): EnvConfig {
         ALERT_WEBHOOK_URL: process.env.ALERT_WEBHOOK_URL,
         NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
       };
+      _cached = fallback;
+      return fallback;
     }
 
     throw new Error(
@@ -44,7 +50,17 @@ function loadConfig(): EnvConfig {
     );
   }
 
+  _cached = result.data;
   return result.data;
 }
 
-export const config = loadConfig();
+/**
+ * Lazy-loaded config. Validation runs on first property access, not at import time.
+ * This prevents build-time crashes when env vars are not available.
+ */
+export const config: EnvConfig = new Proxy({} as EnvConfig, {
+  get(_target, prop: string) {
+    const resolved = loadConfig();
+    return resolved[prop as keyof EnvConfig];
+  },
+});

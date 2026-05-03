@@ -1,9 +1,14 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '@/lib/config';
 
-export const anthropic = new Anthropic({
-  apiKey: config.ANTHROPIC_API_KEY,
-});
+let _anthropic: Anthropic | null = null;
+
+function getAnthropic(): Anthropic {
+  if (!_anthropic) {
+    _anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
+  }
+  return _anthropic;
+}
 
 export const MODEL = 'claude-sonnet-4-20250514';
 export const MAX_TOKENS = 8192;
@@ -15,7 +20,7 @@ export async function callClaude(params: {
 }): Promise<string> {
   const { systemPrompt, userMessage, maxTokens = MAX_TOKENS } = params;
 
-  const response = await anthropic.messages.create({
+  const response = await getAnthropic().messages.create({
     model: MODEL,
     max_tokens: maxTokens,
     system: [
