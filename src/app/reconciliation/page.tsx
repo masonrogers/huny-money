@@ -59,18 +59,18 @@ export default function ReconciliationPage() {
               {data.logs.map(
                 (log: {
                   id: number;
-                  boot_at: string;
-                  downtime_seconds: number | null;
-                  discrepancies_found: unknown[] | null;
-                  actions_taken: unknown[] | null;
+                  bootAt: string;
+                  downtimeSeconds: number | null;
+                  discrepanciesFound: unknown[] | null;
+                  actionsTaken: unknown[] | null;
                 }) => {
                   const discrepancyCount = Array.isArray(
-                    log.discrepancies_found
+                    log.discrepanciesFound
                   )
-                    ? log.discrepancies_found.length
+                    ? log.discrepanciesFound.length
                     : 0;
-                  const actionsCount = Array.isArray(log.actions_taken)
-                    ? log.actions_taken.length
+                  const actionsCount = Array.isArray(log.actionsTaken)
+                    ? log.actionsTaken.length
                     : 0;
                   const hasDiscrepancies = discrepancyCount > 0;
 
@@ -82,10 +82,10 @@ export default function ReconciliationPage() {
                       }`}
                     >
                       <td className="px-5 py-3 text-white font-mono text-xs">
-                        {dateFmt.format(new Date(log.boot_at))}
+                        {dateFmt.format(new Date(log.bootAt))}
                       </td>
                       <td className="px-5 py-3 text-gray-300">
-                        {formatDuration(log.downtime_seconds)}
+                        {formatDuration(log.downtimeSeconds)}
                       </td>
                       <td className="px-5 py-3">
                         <span
@@ -111,7 +111,7 @@ export default function ReconciliationPage() {
                             </summary>
                             <pre className="text-xs text-gray-400 mt-2 bg-gray-900 rounded p-2 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap font-mono">
                               {JSON.stringify(
-                                log.discrepancies_found,
+                                log.discrepanciesFound,
                                 null,
                                 2
                               )}

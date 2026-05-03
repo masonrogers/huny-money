@@ -60,14 +60,14 @@ export default function TradesPage() {
                     id: number;
                     asset: string;
                     type: string;
-                    entry_price: number;
-                    exit_price: number;
-                    gross_pnl: number;
-                    net_pnl: number;
-                    hold_duration_days: number;
-                    exit_reason: string;
-                    strategy_version: string;
-                    closed_at: string;
+                    entryPrice: number;
+                    exitPrice: number;
+                    grossPnl: number;
+                    netPnl: number;
+                    holdDurationDays: number;
+                    exitReason: string;
+                    strategyVersion: string;
+                    closedAt: string;
                   }) => (
                     <tr
                       key={trade.id}
@@ -88,33 +88,33 @@ export default function TradesPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 font-mono text-gray-300">
-                        {fmt.format(trade.entry_price)}
+                        {fmt.format(trade.entryPrice)}
                       </td>
                       <td className="px-4 py-3 font-mono text-gray-300">
-                        {fmt.format(trade.exit_price)}
+                        {fmt.format(trade.exitPrice)}
                       </td>
                       <td
                         className={`px-4 py-3 font-mono font-medium ${pnlColor(
-                          trade.gross_pnl
+                          trade.grossPnl
                         )}`}
                       >
-                        {fmt.format(trade.gross_pnl)}
+                        {fmt.format(trade.grossPnl)}
                       </td>
                       <td
                         className={`px-4 py-3 font-mono font-medium ${pnlColor(
-                          trade.net_pnl
+                          trade.netPnl
                         )}`}
                       >
-                        {fmt.format(trade.net_pnl)}
+                        {fmt.format(trade.netPnl)}
                       </td>
                       <td className="px-4 py-3 text-gray-400">
-                        {trade.hold_duration_days}d
+                        {trade.holdDurationDays}d
                       </td>
                       <td className="px-4 py-3 text-gray-400 text-xs">
-                        {trade.exit_reason?.replace(/_/g, " ") || "--"}
+                        {trade.exitReason?.replace(/_/g, " ") || "--"}
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-gray-500">
-                        {trade.strategy_version}
+                        {trade.strategyVersion}
                       </td>
                     </tr>
                   )
@@ -127,7 +127,7 @@ export default function TradesPage() {
           <div className="flex items-center justify-between">
             <p className="text-sm text-gray-500">
               Page {page}
-              {data.total_pages ? ` of ${data.total_pages}` : ""}
+              {data.totalPages ? ` of ${data.totalPages}` : ""}
             </p>
             <div className="flex gap-2">
               <button
@@ -139,7 +139,7 @@ export default function TradesPage() {
               </button>
               <button
                 onClick={() => setPage((p) => p + 1)}
-                disabled={data.total_pages ? page >= data.total_pages : false}
+                disabled={data.totalPages ? page >= data.totalPages : false}
                 className="px-3 py-1.5 rounded-lg bg-gray-800 border border-gray-700 text-sm text-gray-300 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Next

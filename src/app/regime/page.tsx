@@ -57,22 +57,22 @@ export default function RegimePage() {
             <div className="flex items-center gap-4">
               <span
                 className={`rounded-xl px-6 py-3 text-2xl font-bold ${
-                  regimeStyles[data.current_regime]?.bg ?? "bg-gray-700"
-                } ${regimeStyles[data.current_regime]?.text ?? "text-gray-200"}`}
+                  regimeStyles[data.currentRegime]?.bg ?? "bg-gray-700"
+                } ${regimeStyles[data.currentRegime]?.text ?? "text-gray-200"}`}
               >
-                {(data.current_regime ?? "unknown")
+                {(data.currentRegime ?? "unknown")
                   .replace(/_/g, " ")
                   .toUpperCase()}
               </span>
-              {data.regime_evidence && (
+              {data.regimeEvidence && (
                 <p className="text-sm text-gray-400 max-w-xl">
-                  {data.regime_evidence}
+                  {data.regimeEvidence}
                 </p>
               )}
             </div>
-            {data.assessed_at && (
+            {data.assessedAt && (
               <p className="text-xs text-gray-500 mt-3">
-                Last assessed: {dateFmt.format(new Date(data.assessed_at))}
+                Last assessed: {dateFmt.format(new Date(data.assessedAt))}
               </p>
             )}
           </div>
@@ -89,10 +89,10 @@ export default function RegimePage() {
                     thesis: {
                       id: number;
                       asset: string;
-                      thesis_text: string;
+                      thesisText: string;
                       status: string;
                       conviction: number;
-                      last_reviewed_at: string;
+                      lastReviewedAt: string;
                     },
                     idx: number
                   ) => (
@@ -122,7 +122,7 @@ export default function RegimePage() {
                         </span>
                       </div>
                       <p className="text-sm text-gray-300 mb-3">
-                        {thesis.thesis_text}
+                        {thesis.thesisText}
                       </p>
                       <div className="w-full bg-gray-700 rounded-full h-2">
                         <div
@@ -136,9 +136,9 @@ export default function RegimePage() {
                       </div>
                       <p className="text-xs text-gray-500 mt-2">
                         Last reviewed:{" "}
-                        {thesis.last_reviewed_at
+                        {thesis.lastReviewedAt
                           ? dateFmt.format(
-                              new Date(thesis.last_reviewed_at)
+                              new Date(thesis.lastReviewedAt)
                             )
                           : "--"}
                       </p>
@@ -166,8 +166,8 @@ export default function RegimePage() {
                         id: number;
                         regime: string;
                         evidence: string;
-                        assessed_at: string;
-                        was_correct: boolean | null;
+                        assessedAt: string;
+                        wasCorrect: boolean | null;
                       },
                       idx: number
                     ) => (
@@ -200,18 +200,18 @@ export default function RegimePage() {
                             </span>
                             <span className="text-xs text-gray-500">
                               {dateFmt.format(
-                                new Date(entry.assessed_at)
+                                new Date(entry.assessedAt)
                               )}
                             </span>
-                            {entry.was_correct !== null && (
+                            {entry.wasCorrect !== null && (
                               <span
                                 className={`text-xs ${
-                                  entry.was_correct
+                                  entry.wasCorrect
                                     ? "text-emerald-400"
                                     : "text-red-400"
                                 }`}
                               >
-                                {entry.was_correct
+                                {entry.wasCorrect
                                   ? "Correct"
                                   : "Incorrect"}
                               </span>

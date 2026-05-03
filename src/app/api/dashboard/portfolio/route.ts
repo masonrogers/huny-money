@@ -73,20 +73,20 @@ export async function GET() {
     const hardBreakerActive = totalValue <= HARD_CIRCUIT_BREAKER;
 
     return NextResponse.json({
-      total_value_usd: totalValue,
-      cash_usd: cashUsd,
-      remaining_deployable_usd: Math.round(remainingDeployableUsd * 100) / 100,
-      exposure_pct: Math.round(exposurePct * 100) / 100,
+      totalValueUsd: totalValue,
+      cashUsd: cashUsd,
+      remainingDeployableUsd: Math.round(remainingDeployableUsd * 100) / 100,
+      exposurePct: Math.round(exposurePct * 100) / 100,
       regime,
-      regime_exposure_cap_pct: Math.round(regimeExposureCapPct * 100) / 100,
-      drawdown_from_peak_pct: Math.round(drawdownPct * 100) / 100,
-      peak_value_usd: peakValue,
+      regimeExposureCapPct: Math.round(regimeExposureCapPct * 100) / 100,
+      drawdownFromPeakPct: Math.round(drawdownPct * 100) / 100,
+      peakValueUsd: peakValue,
       positions: openPositions,
-      strategy_version: strategyVersion,
-      soft_breaker_active: softBreakerActive,
-      hard_breaker_active: hardBreakerActive,
-      paper_mode: paperMode,
-      trading_paused: tradingPaused,
+      strategyVersion: strategyVersion,
+      softBreakerActive: softBreakerActive,
+      hardBreakerActive: hardBreakerActive,
+      paperMode: paperMode,
+      tradingPaused: tradingPaused,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {

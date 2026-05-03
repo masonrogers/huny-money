@@ -80,17 +80,17 @@ export default function PositionsPage() {
                 id: number;
                 asset: string;
                 type: string;
-                entry_price: number;
-                current_price: number;
-                unrealized_pnl_usd: number;
-                unrealized_pnl_pct: number;
-                stop_loss: number;
-                take_profit_target: number;
-                current_conviction: number;
-                conviction_at_entry: number;
-                days_held: number;
-                cost_basis: number;
-                position_value_usd: number;
+                entryPrice: number;
+                currentPrice: number;
+                unrealizedPnlUsd: number;
+                unrealizedPnlPct: number;
+                stopLoss: number;
+                takeProfitTarget: number;
+                currentConviction: number;
+                convictionAtEntry: number;
+                daysHeld: number;
+                costBasis: number;
+                positionValueUsd: number;
                 thesis: string | null;
               }) => (
                 <div
@@ -114,7 +114,7 @@ export default function PositionsPage() {
                       </span>
                     </div>
                     <span className="text-xs text-gray-500">
-                      {pos.days_held}d held
+                      {pos.daysHeld}d held
                     </span>
                   </div>
 
@@ -123,13 +123,13 @@ export default function PositionsPage() {
                     <div>
                       <p className="text-gray-500 text-xs">Entry</p>
                       <p className="text-gray-200 font-mono">
-                        {fmt.format(pos.entry_price)}
+                        {fmt.format(pos.entryPrice)}
                       </p>
                     </div>
                     <div>
                       <p className="text-gray-500 text-xs">Current</p>
                       <p className="text-gray-200 font-mono">
-                        {fmt.format(pos.current_price)}
+                        {fmt.format(pos.currentPrice)}
                       </p>
                     </div>
                   </div>
@@ -140,17 +140,17 @@ export default function PositionsPage() {
                     <div className="text-right">
                       <span
                         className={`text-lg font-bold ${pnlColor(
-                          pos.unrealized_pnl_usd
+                          pos.unrealizedPnlUsd
                         )}`}
                       >
-                        {fmt.format(pos.unrealized_pnl_usd)}
+                        {fmt.format(pos.unrealizedPnlUsd)}
                       </span>
                       <span
                         className={`ml-2 text-sm ${pnlColor(
-                          pos.unrealized_pnl_pct
+                          pos.unrealizedPnlPct
                         )}`}
                       >
-                        {pct(pos.unrealized_pnl_pct)}
+                        {pct(pos.unrealizedPnlPct)}
                       </span>
                     </div>
                   </div>
@@ -160,13 +160,13 @@ export default function PositionsPage() {
                     <div>
                       <p className="text-gray-500 text-xs">Stop Loss</p>
                       <p className="text-red-400 font-mono">
-                        {fmt.format(pos.stop_loss)}
+                        {fmt.format(pos.stopLoss)}
                       </p>
                     </div>
                     <div>
                       <p className="text-gray-500 text-xs">Take Profit</p>
                       <p className="text-emerald-400 font-mono">
-                        {fmt.format(pos.take_profit_target)}
+                        {fmt.format(pos.takeProfitTarget)}
                       </p>
                     </div>
                   </div>
@@ -176,20 +176,20 @@ export default function PositionsPage() {
                     <div className="flex items-center justify-between text-xs mb-1">
                       <span className="text-gray-500">Conviction</span>
                       <span className="text-gray-300 font-mono">
-                        {pos.current_conviction}/100
+                        {pos.currentConviction}/100
                       </span>
                     </div>
                     <div className="w-full bg-gray-700 rounded-full h-2">
                       <div
                         className={`h-2 rounded-full transition-all ${
-                          pos.current_conviction >= 70
+                          pos.currentConviction >= 70
                             ? "bg-emerald-500"
-                            : pos.current_conviction >= 40
+                            : pos.currentConviction >= 40
                             ? "bg-yellow-500"
                             : "bg-red-500"
                         }`}
                         style={{
-                          width: `${Math.min(pos.current_conviction, 100)}%`,
+                          width: `${Math.min(pos.currentConviction, 100)}%`,
                         }}
                       />
                     </div>
@@ -197,8 +197,8 @@ export default function PositionsPage() {
 
                   {/* Value */}
                   <div className="text-xs text-gray-500 flex justify-between">
-                    <span>Size: {fmt.format(pos.position_value_usd)}</span>
-                    <span>Cost: {fmt.format(pos.cost_basis)}</span>
+                    <span>Size: {fmt.format(pos.positionValueUsd)}</span>
+                    <span>Cost: {fmt.format(pos.costBasis)}</span>
                   </div>
                 </div>
               )
@@ -228,11 +228,11 @@ export default function PositionsPage() {
                   id: number;
                   asset: string;
                   type: string;
-                  entry_price: number;
-                  exit_price: number;
-                  net_pnl: number;
-                  exit_reason: string;
-                  days_held: number;
+                  entryPrice: number;
+                  exitPrice: number;
+                  netPnl: number;
+                  exitReason: string;
+                  daysHeld: number;
                 }) => (
                   <tr
                     key={pos.id}
@@ -253,23 +253,23 @@ export default function PositionsPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3 font-mono text-gray-300">
-                      {fmt.format(pos.entry_price)}
+                      {fmt.format(pos.entryPrice)}
                     </td>
                     <td className="px-4 py-3 font-mono text-gray-300">
-                      {pos.exit_price ? fmt.format(pos.exit_price) : "--"}
+                      {pos.exitPrice ? fmt.format(pos.exitPrice) : "--"}
                     </td>
                     <td
                       className={`px-4 py-3 font-mono font-medium ${pnlColor(
-                        pos.net_pnl
+                        pos.netPnl
                       )}`}
                     >
-                      {pos.net_pnl != null ? fmt.format(pos.net_pnl) : "--"}
+                      {pos.netPnl != null ? fmt.format(pos.netPnl) : "--"}
                     </td>
                     <td className="px-4 py-3 text-gray-400 text-xs">
-                      {pos.exit_reason?.replace(/_/g, " ") || "--"}
+                      {pos.exitReason?.replace(/_/g, " ") || "--"}
                     </td>
                     <td className="px-4 py-3 text-gray-400">
-                      {pos.days_held}d
+                      {pos.daysHeld}d
                     </td>
                   </tr>
                 )

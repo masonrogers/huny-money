@@ -104,14 +104,14 @@ export default function EvaluationsPage() {
                 id: number;
                 timestamp: string;
                 type: string;
-                opus_response: Record<string, unknown> | null;
-                actions_taken: Record<string, unknown> | null;
-                strategy_version: string;
+                opusResponse: Record<string, unknown> | null;
+                actionsTaken: Record<string, unknown> | null;
+                strategyVersion: string;
               }) => (
                 <div
                   key={ev.id}
                   className={`rounded-xl bg-gray-800 border border-gray-700 border-l-4 ${borderColor(
-                    ev.actions_taken
+                    ev.actionsTaken
                   )} overflow-hidden`}
                 >
                   <button
@@ -136,7 +136,7 @@ export default function EvaluationsPage() {
                       </div>
                       <div className="flex items-center gap-3">
                         <span className="text-xs font-mono text-gray-500">
-                          v{ev.strategy_version}
+                          v{ev.strategyVersion}
                         </span>
                         <span className="text-gray-500 text-xs">
                           {expanded === ev.id ? "▼" : "▶"}
@@ -144,7 +144,7 @@ export default function EvaluationsPage() {
                       </div>
                     </div>
                     <p className="text-sm text-gray-400 mt-2">
-                      {summarizeActions(ev.actions_taken)}
+                      {summarizeActions(ev.actionsTaken)}
                     </p>
                   </button>
 
@@ -155,16 +155,16 @@ export default function EvaluationsPage() {
                           Claude Response
                         </h4>
                         <pre className="text-xs text-gray-300 bg-gray-900 rounded-lg p-4 overflow-x-auto max-h-96 overflow-y-auto whitespace-pre-wrap font-mono">
-                          {JSON.stringify(ev.opus_response, null, 2)}
+                          {JSON.stringify(ev.opusResponse, null, 2)}
                         </pre>
                       </div>
-                      {ev.actions_taken && (
+                      {ev.actionsTaken && (
                         <div className="mt-3">
                           <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
                             Actions Taken
                           </h4>
                           <pre className="text-xs text-gray-300 bg-gray-900 rounded-lg p-4 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap font-mono">
-                            {JSON.stringify(ev.actions_taken, null, 2)}
+                            {JSON.stringify(ev.actionsTaken, null, 2)}
                           </pre>
                         </div>
                       )}
@@ -179,7 +179,7 @@ export default function EvaluationsPage() {
           <div className="flex items-center justify-between">
             <p className="text-sm text-gray-500">
               Page {page}
-              {data.total_pages ? ` of ${data.total_pages}` : ""}
+              {data.totalPages ? ` of ${data.totalPages}` : ""}
             </p>
             <div className="flex gap-2">
               <button
@@ -192,7 +192,7 @@ export default function EvaluationsPage() {
               <button
                 onClick={() => setPage((p) => p + 1)}
                 disabled={
-                  data.total_pages ? page >= data.total_pages : false
+                  data.totalPages ? page >= data.totalPages : false
                 }
                 className="px-3 py-1.5 rounded-lg bg-gray-800 border border-gray-700 text-sm text-gray-300 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >

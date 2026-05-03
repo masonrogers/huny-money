@@ -61,29 +61,29 @@ export default function DashboardPage() {
             <div className="rounded-xl bg-gray-800 border border-gray-700 p-5">
               <p className="text-sm text-gray-400 mb-1">Total Value</p>
               <p className="text-2xl font-bold text-white">
-                {fmt.format(portfolio.total_value_usd)}
+                {fmt.format(portfolio.totalValueUsd)}
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                Peak: {fmt.format(portfolio.peak_value_usd)}
+                Peak: {fmt.format(portfolio.peakValueUsd)}
               </p>
             </div>
             <div className="rounded-xl bg-gray-800 border border-gray-700 p-5">
               <p className="text-sm text-gray-400 mb-1">Cash Available</p>
               <p className="text-2xl font-bold text-white">
-                {fmt.format(portfolio.cash_usd)}
+                {fmt.format(portfolio.cashUsd)}
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                Deployable: {fmt.format(portfolio.remaining_deployable_usd)}
+                Deployable: {fmt.format(portfolio.remainingDeployableUsd)}
               </p>
             </div>
             <div className="rounded-xl bg-gray-800 border border-gray-700 p-5">
               <p className="text-sm text-gray-400 mb-1">Deployed</p>
               <p className="text-2xl font-bold text-white">
-                {pct(portfolio.exposure_pct)}
+                {pct(portfolio.exposurePct)}
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                Cap: {pct(portfolio.regime_exposure_cap_pct)} | Drawdown:{" "}
-                {pct(portfolio.drawdown_from_peak_pct)}
+                Cap: {pct(portfolio.regimeExposureCapPct)} | Drawdown:{" "}
+                {pct(portfolio.drawdownFromPeakPct)}
               </p>
             </div>
             <div className="rounded-xl bg-gray-800 border border-gray-700 p-5">
@@ -97,10 +97,10 @@ export default function DashboardPage() {
                   {portfolio.regime?.replace(/_/g, " ").toUpperCase()}
                 </span>
               </p>
-              {(portfolio.soft_breaker_active ||
-                portfolio.hard_breaker_active) && (
+              {(portfolio.softBreakerActive ||
+                portfolio.hardBreakerActive) && (
                 <p className="text-xs text-red-400 mt-2">
-                  {portfolio.hard_breaker_active
+                  {portfolio.hardBreakerActive
                     ? "Hard breaker active"
                     : "Soft breaker active"}
                 </p>
@@ -132,7 +132,7 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-400">Strategy Version</span>
               <span className="text-sm text-white font-mono">
-                {portfolio?.strategy_version ?? "--"}
+                {portfolio?.strategyVersion ?? "--"}
               </span>
             </div>
             <div className="flex items-center justify-between">
@@ -165,7 +165,7 @@ export default function DashboardPage() {
                   severity: string;
                   type: string;
                   message: string;
-                  created_at: string;
+                  createdAt: string;
                 }) => (
                   <div
                     key={alert.id}
@@ -184,7 +184,7 @@ export default function DashboardPage() {
                           day: "numeric",
                           hour: "2-digit",
                           minute: "2-digit",
-                        }).format(new Date(alert.created_at))}
+                        }).format(new Date(alert.createdAt))}
                       </span>
                     </div>
                     <p className="text-xs opacity-80">{alert.message}</p>

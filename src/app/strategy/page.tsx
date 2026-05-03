@@ -60,24 +60,24 @@ export default function StrategyPage() {
                 <tbody className="divide-y divide-gray-700/50">
                   {data.params.map(
                     (param: {
-                      param_name: string;
-                      current_value: string;
-                      default_value: string;
-                      min_allowed: string;
-                      max_allowed: string;
-                      version_changed: string;
+                      paramName: string;
+                      currentValue: string;
+                      defaultValue: string;
+                      minAllowed: string;
+                      maxAllowed: string;
+                      versionChanged: string;
                     }) => {
                       const isModified =
-                        param.current_value !== param.default_value;
+                        param.currentValue !== param.defaultValue;
                       return (
                         <tr
-                          key={param.param_name}
+                          key={param.paramName}
                           className={`hover:bg-gray-700/30 transition-colors ${
                             isModified ? "bg-amber-900/10" : ""
                           }`}
                         >
                           <td className="px-5 py-3 font-medium text-white font-mono text-xs">
-                            {param.param_name}
+                            {param.paramName}
                           </td>
                           <td
                             className={`px-5 py-3 font-mono ${
@@ -86,16 +86,16 @@ export default function StrategyPage() {
                                 : "text-gray-300"
                             }`}
                           >
-                            {param.current_value}
+                            {param.currentValue}
                           </td>
                           <td className="px-5 py-3 font-mono text-gray-500">
-                            {param.default_value}
+                            {param.defaultValue}
                           </td>
                           <td className="px-5 py-3 font-mono text-gray-500 text-xs">
-                            {param.min_allowed} - {param.max_allowed}
+                            {param.minAllowed} - {param.maxAllowed}
                           </td>
                           <td className="px-5 py-3 font-mono text-xs text-gray-500">
-                            {param.version_changed ?? "--"}
+                            {param.versionChanged ?? "--"}
                           </td>
                         </tr>
                       );
@@ -122,13 +122,13 @@ export default function StrategyPage() {
                 {data.modifications.map(
                   (mod: {
                     id: number;
-                    from_version: string;
-                    to_version: string;
+                    fromVersion: string;
+                    toVersion: string;
                     timestamp: string;
-                    params_changed: Record<string, unknown>;
+                    paramsChanged: Record<string, unknown>;
                     reasoning: string;
-                    trade_count_at_modification: number;
-                    win_rate_at_modification: string | null;
+                    tradeCountAtModification: number;
+                    winRateAtModification: string | null;
                   }) => (
                     <div
                       key={mod.id}
@@ -137,11 +137,11 @@ export default function StrategyPage() {
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-mono text-gray-300">
-                            v{mod.from_version}
+                            v{mod.fromVersion}
                           </span>
                           <span className="text-gray-600">-&gt;</span>
                           <span className="text-sm font-mono text-white font-medium">
-                            v{mod.to_version}
+                            v{mod.toVersion}
                           </span>
                         </div>
                         <span className="text-xs text-gray-500">
@@ -153,20 +153,20 @@ export default function StrategyPage() {
                       </p>
                       <div className="flex items-center gap-4 text-xs text-gray-500">
                         <span>
-                          Trades: {mod.trade_count_at_modification}
+                          Trades: {mod.tradeCountAtModification}
                         </span>
-                        {mod.win_rate_at_modification && (
+                        {mod.winRateAtModification && (
                           <span>
                             Win rate:{" "}
                             {Number(
-                              mod.win_rate_at_modification
+                              mod.winRateAtModification
                             ).toFixed(1)}
                             %
                           </span>
                         )}
                         <span>
                           Changed:{" "}
-                          {Object.keys(mod.params_changed || {}).join(
+                          {Object.keys(mod.paramsChanged || {}).join(
                             ", "
                           )}
                         </span>
