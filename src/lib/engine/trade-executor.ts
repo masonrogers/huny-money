@@ -8,7 +8,7 @@ import {
 import { createPosition } from '@/lib/db/queries/positions';
 import { createOrder } from '@/lib/db/queries/orders';
 import { createTimer } from '@/lib/db/queries/timers';
-import { getState } from '@/lib/db/queries/system-state';
+import { getState, setState } from '@/lib/db/queries/system-state';
 import { TAKER_FEE } from '@/lib/constants';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -219,6 +219,18 @@ export async function executeNewTrade(
           product_id: productId,
         }),
       });
+    }
+
+    // 14. Deduct cost from paper_cash_usd in paper mode
+    if (paperMode) {
+      const fees = costBasis * TAKER_FEE;
+      const totalCost = costBasis + fees;
+      const currentCashStr = await getState('paper_cash_usd');
+      const currentCash = currentCashStr ? Number(currentCashStr) : 0;
+      await setState('paper_cash_usd', String(currentCash - totalCost));
+      console.log(
+        `[TradeExecutor] Paper cash deducted: $${totalCost.toFixed(2)} (cost $${costBasis.toFixed(2)} + fees $${fees.toFixed(2)}). Remaining: $${(currentCash - totalCost).toFixed(2)}`,
+      );
     }
 
     console.log(

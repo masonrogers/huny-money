@@ -532,69 +532,111 @@ export async function runFullReconciliation(): Promise<{
     emergencyTriggered: false,
   };
 
-  // Step 1: Health check (throws if failed)
-  await healthCheck();
+  const isPaper = (await getState('paper_trading_mode')) === 'true';
 
-  // Step 2: Determine context
-  const downtimeSeconds = await determineContext();
+  if (isPaper) {
+    // Paper mode: only do DB health check, missed evaluations, and emergency thresholds.
+    // Skip all Coinbase account/balance reconciliation.
+    console.log('[Reconciliation] Paper mode: skipping Coinbase order/balance reconciliation.');
 
-  // Step 3: Reconcile orders
-  try {
-    await reconcileOrders(result);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[Reconciliation] Order reconciliation failed: ${message}`);
-    await createAlert({
-      type: 'reconciliation_discrepancy',
-      severity: 'critical',
-      message: `Order reconciliation failed: ${message}`,
-    });
+    // Step 1: DB-only health check
+    try {
+      await db.select().from(systemState).limit(1);
+      console.log('[Reconciliation] DB health check: OK');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[Reconciliation] DB health check FAILED: ${message}`);
+      throw new Error(`DB health check failed: ${message}`);
+    }
+
+    // Step 2: Determine context
+    const downtimeSeconds = await determineContext();
+
+    // Step 6: Check missed evaluations
+    try {
+      await checkMissedEvaluations(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[Reconciliation] Missed evaluation check failed: ${message}`);
+    }
+
+    // Step 7: Check emergency thresholds (uses market prices, not account data)
+    try {
+      await checkEmergencyThresholds(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[Reconciliation] Emergency threshold check failed: ${message}`);
+    }
+
+    // Step 8: Resume normal operations
+    await resumeOperations(downtimeSeconds, result);
+  } else {
+    // Live mode: full reconciliation including Coinbase
+
+    // Step 1: Health check (throws if failed)
+    await healthCheck();
+
+    // Step 2: Determine context
+    const downtimeSeconds = await determineContext();
+
+    // Step 3: Reconcile orders
+    try {
+      await reconcileOrders(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[Reconciliation] Order reconciliation failed: ${message}`);
+      await createAlert({
+        type: 'reconciliation_discrepancy',
+        severity: 'critical',
+        message: `Order reconciliation failed: ${message}`,
+      });
+    }
+
+    // Step 4: Reconcile balances
+    try {
+      await reconcileBalances(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[Reconciliation] Balance reconciliation failed: ${message}`);
+      await createAlert({
+        type: 'reconciliation_discrepancy',
+        severity: 'warning',
+        message: `Balance reconciliation failed: ${message}`,
+      });
+    }
+
+    // Step 5: Verify position safety (HIGHEST PRIORITY)
+    try {
+      await verifyPositionSafety(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[Reconciliation] Position safety check failed: ${message}`);
+      await createAlert({
+        type: 'reconciliation_discrepancy',
+        severity: 'critical',
+        message: `Position safety verification failed: ${message}. Open positions may be UNPROTECTED.`,
+      });
+    }
+
+    // Step 6: Check missed evaluations
+    try {
+      await checkMissedEvaluations(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[Reconciliation] Missed evaluation check failed: ${message}`);
+    }
+
+    // Step 7: Check emergency thresholds
+    try {
+      await checkEmergencyThresholds(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[Reconciliation] Emergency threshold check failed: ${message}`);
+    }
+
+    // Step 8: Resume normal operations
+    await resumeOperations(downtimeSeconds, result);
   }
-
-  // Step 4: Reconcile balances
-  try {
-    await reconcileBalances(result);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[Reconciliation] Balance reconciliation failed: ${message}`);
-    await createAlert({
-      type: 'reconciliation_discrepancy',
-      severity: 'warning',
-      message: `Balance reconciliation failed: ${message}`,
-    });
-  }
-
-  // Step 5: Verify position safety (HIGHEST PRIORITY)
-  try {
-    await verifyPositionSafety(result);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[Reconciliation] Position safety check failed: ${message}`);
-    await createAlert({
-      type: 'reconciliation_discrepancy',
-      severity: 'critical',
-      message: `Position safety verification failed: ${message}. Open positions may be UNPROTECTED.`,
-    });
-  }
-
-  // Step 6: Check missed evaluations
-  try {
-    await checkMissedEvaluations(result);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[Reconciliation] Missed evaluation check failed: ${message}`);
-  }
-
-  // Step 7: Check emergency thresholds
-  try {
-    await checkEmergencyThresholds(result);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[Reconciliation] Emergency threshold check failed: ${message}`);
-  }
-
-  // Step 8: Resume normal operations
-  await resumeOperations(downtimeSeconds, result);
 
   // Create alerts for critical discrepancies
   const criticalDiscrepancies = result.discrepancies.filter(

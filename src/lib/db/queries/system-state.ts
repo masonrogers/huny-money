@@ -52,6 +52,8 @@ export async function initializeDefaults(): Promise<void> {
     { key: 'approved_tertiary_assets', value: '[]' },
     { key: 'total_trade_count', value: '0' },
     { key: 'last_strategy_review_at', value: null },
+    { key: 'paper_cash_usd', value: '500' },
+    { key: 'paper_peak_value', value: '500' },
   ];
 
   for (const { key, value } of defaults) {

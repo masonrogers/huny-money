@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { setState } from '@/lib/db/queries/system-state';
 import { createAlert } from '@/lib/db/queries/alerts';
+import { STARTING_CAPITAL } from '@/lib/constants';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +19,12 @@ export async function POST(request: NextRequest) {
 
     await setState('paper_trading_mode', String(enabled));
 
+    // When switching TO paper mode, reset virtual cash and peak value
+    if (enabled) {
+      await setState('paper_cash_usd', String(STARTING_CAPITAL));
+      await setState('paper_peak_value', String(STARTING_CAPITAL));
+    }
+
     await createAlert({
       type: 'emergency_evaluation',
       severity: 'warning',
@@ -26,7 +33,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       message: `Paper trading mode ${enabled ? 'enabled' : 'disabled'} successfully`,
-      paper_trading_mode: enabled,
+      paperTradingMode: enabled,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {

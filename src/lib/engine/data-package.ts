@@ -21,7 +21,7 @@ import type {
 } from '@/lib/types/evaluation';
 import type { EvaluationType, RegimeName } from '@/lib/types/strategy';
 import type { CandleGranularity, Candle as CoinbaseCandle } from '@/lib/coinbase/types';
-import { getAccounts, getAllBalances, getCandles, getMidPrice } from '@/lib/coinbase';
+import { getAllBalances, getCandles, getMidPrice } from '@/lib/coinbase';
 import { computeAllIndicators } from '@/lib/indicators/index';
 import { getOpenPositions, getClosedPositions } from '@/lib/db/queries/positions';
 import { getActiveTheses } from '@/lib/db/queries/theses';
@@ -230,17 +230,28 @@ async function assemblePortfolioState(): Promise<PortfolioData> {
   const states = await getMultipleStates([
     'current_regime',
     'peak_portfolio_value',
+    'paper_peak_value',
+    'paper_cash_usd',
     'starting_capital',
     'strategy_version',
   ]);
 
   const regime = (states.current_regime ?? 'ranging') as RegimeName;
-  const peakValue = states.peak_portfolio_value ? Number(states.peak_portfolio_value) : STARTING_CAPITAL;
   const startingCapital = states.starting_capital ? Number(states.starting_capital) : STARTING_CAPITAL;
 
-  // Get live balances
-  const balances = await getAllBalances(['USD', 'BTC', 'ETH', 'SOL']);
-  const cashAvailable = balances.USD?.available ?? 0;
+  let cashAvailable: number;
+  let peakValue: number;
+
+  if (paperMode) {
+    // Paper mode: use virtual cash, no Coinbase balance calls
+    cashAvailable = states.paper_cash_usd ? Number(states.paper_cash_usd) : STARTING_CAPITAL;
+    peakValue = states.paper_peak_value ? Number(states.paper_peak_value) : STARTING_CAPITAL;
+  } else {
+    // Live mode: use real Coinbase balances
+    const balances = await getAllBalances(['USD', 'BTC', 'ETH', 'SOL']);
+    cashAvailable = balances.USD?.available ?? 0;
+    peakValue = states.peak_portfolio_value ? Number(states.peak_portfolio_value) : STARTING_CAPITAL;
+  }
 
   // Get current prices for open positions and compute position values
   const positionSnapshots: PositionSnapshot[] = [];

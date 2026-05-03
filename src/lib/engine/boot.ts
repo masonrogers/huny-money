@@ -10,6 +10,7 @@ import { getState, setState, initializeDefaults } from '@/lib/db/queries/system-
 import { initializeDefaultParams } from '@/lib/db/queries/strategy';
 import { createAlert } from '@/lib/db/queries/alerts';
 import { runFullReconciliation } from '@/lib/engine/reconciliation';
+import { STARTING_CAPITAL } from '@/lib/constants';
 
 // ─── Boot Sequence ─────────────────────────────────────────────────────────
 
@@ -53,6 +54,10 @@ export async function runBootSequence(): Promise<{
 
     // Ensure paper trading mode is on for first launch
     await setState('paper_trading_mode', 'true');
+
+    // Initialize paper mode virtual cash system
+    await setState('paper_cash_usd', String(STARTING_CAPITAL));
+    await setState('paper_peak_value', String(STARTING_CAPITAL));
 
     // Record boot time
     await setState('last_successful_boot_at', new Date().toISOString());

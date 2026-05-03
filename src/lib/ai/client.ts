@@ -10,7 +10,7 @@ function getAnthropic(): Anthropic {
   return _anthropic;
 }
 
-export const MODEL = 'claude-sonnet-4-20250514';
+export const MODEL = 'claude-sonnet-4-6';
 export const MAX_TOKENS = 8192;
 
 export async function callClaude(params: {

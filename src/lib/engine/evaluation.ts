@@ -24,7 +24,7 @@ import { buildSwingPrompt } from '@/lib/ai/prompts/swing-evaluation';
 import { buildEmergencyPrompt } from '@/lib/ai/prompts/emergency';
 import { parseEvaluationResponse } from '@/lib/ai/response-parser';
 import { getMidPrice, getAllBalances } from '@/lib/coinbase';
-import { EVALUATION_TIMES, ALL_ASSETS } from '@/lib/constants';
+import { EVALUATION_TIMES, ALL_ASSETS, STARTING_CAPITAL } from '@/lib/constants';
 
 import { executeDecisions } from '@/lib/engine/decision-executor';
 
@@ -56,11 +56,24 @@ async function buildPortfolioStateForRisk(isPaper: boolean): Promise<{
 }> {
   const openPositions = await getOpenPositions(isPaper);
   const regime = ((await getState('current_regime')) ?? 'ranging') as PortfolioState['regime'];
-  const peakStr = await getState('peak_portfolio_value');
-  const peakValue = peakStr ? Number(peakStr) : 500;
   const versionStr = await getCurrentVersion();
-  const balances = await getAllBalances(['USD', 'BTC', 'ETH', 'SOL']);
-  const cashUsd = balances.USD?.available ?? 0;
+
+  let cashUsd: number;
+  let peakValue: number;
+
+  if (isPaper) {
+    // Paper mode: use virtual cash, no Coinbase balance calls
+    const paperCashStr = await getState('paper_cash_usd');
+    cashUsd = paperCashStr ? Number(paperCashStr) : STARTING_CAPITAL;
+    const paperPeakStr = await getState('paper_peak_value');
+    peakValue = paperPeakStr ? Number(paperPeakStr) : STARTING_CAPITAL;
+  } else {
+    // Live mode: use real Coinbase balances
+    const balances = await getAllBalances(['USD', 'BTC', 'ETH', 'SOL']);
+    cashUsd = balances.USD?.available ?? 0;
+    const peakStr = await getState('peak_portfolio_value');
+    peakValue = peakStr ? Number(peakStr) : 500;
+  }
 
   const REGIME_CAP: Record<string, number> = {
     strong_bull: 70,
@@ -424,14 +437,14 @@ export async function runEvaluation(
     }
   }
 
-  // Step 15: Take equity snapshot
+  // Step 15: Take equity snapshot (uses simulated values in paper mode, real in live)
   try {
     const btcPrice = await getMidPrice('BTC-USD');
     const startingCapitalStr = await getState('starting_capital');
-    const startingCapital = startingCapitalStr ? Number(startingCapitalStr) : 500;
+    const startingCapitalVal = startingCapitalStr ? Number(startingCapitalStr) : 500;
     const btcPriceAtStart = await getState('btc_price_at_start');
     const btcStartPrice = btcPriceAtStart ? Number(btcPriceAtStart) : btcPrice;
-    const btcHoldValue = startingCapital * (btcPrice / btcStartPrice);
+    const btcHoldValue = startingCapitalVal * (btcPrice / btcStartPrice);
 
     await insertSnapshot({
       total_value_usd: String(portfolioState.total_value_usd),
@@ -443,8 +456,9 @@ export async function runEvaluation(
 
     // Update peak portfolio value if we have a new high
     if (portfolioState.total_value_usd > portfolioState.peak_value_usd) {
+      const peakKey = paperMode ? 'paper_peak_value' : 'peak_portfolio_value';
       await setState(
-        'peak_portfolio_value',
+        peakKey,
         String(portfolioState.total_value_usd)
       );
     }

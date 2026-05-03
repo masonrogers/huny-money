@@ -291,7 +291,9 @@ export async function computeRiskState(): Promise<RiskState> {
   const dailyLoss = await checkDailyLossLimit();
   const cooldown = await checkCooldown();
 
-  const peakStr = await getState('peak_portfolio_value');
+  const isPaper = (await getState('paper_trading_mode')) === 'true';
+  const peakKey = isPaper ? 'paper_peak_value' : 'peak_portfolio_value';
+  const peakStr = await getState(peakKey);
   const peakValue = peakStr ? Number(peakStr) : 500;
 
   // Estimate current value from peak minus recent losses.
@@ -332,8 +334,9 @@ export async function checkDailyLossLimit(): Promise<{
     return pnl < 0 ? sum + Math.abs(pnl) : sum;
   }, 0);
 
-  // Get current capital to compute limit
-  const peakStr = await getState('peak_portfolio_value');
+  // Get current capital to compute limit (use paper or live peak)
+  const peakKey = isPaper ? 'paper_peak_value' : 'peak_portfolio_value';
+  const peakStr = await getState(peakKey);
   const startingCapitalStr = await getState('starting_capital');
   const currentCapital = peakStr
     ? Number(peakStr)
@@ -387,7 +390,9 @@ export async function checkCircuitBreakers(totalValue: number): Promise<{
   hard: boolean;
   drawdownPct: number;
 }> {
-  const peakStr = await getState('peak_portfolio_value');
+  const isPaper = (await getState('paper_trading_mode')) === 'true';
+  const peakKey = isPaper ? 'paper_peak_value' : 'peak_portfolio_value';
+  const peakStr = await getState(peakKey);
   const peakValue = peakStr ? Number(peakStr) : 500;
 
   const drawdownPct = peakValue > 0 ? (peakValue - totalValue) / peakValue : 0;
@@ -529,7 +534,9 @@ export async function computePositionSize(
   size = Math.min(size, regimeMaxUsd);
 
   // Apply drawdown reduction
-  const peakStr = await getState('peak_portfolio_value');
+  const isPaperForSize = (await getState('paper_trading_mode')) === 'true';
+  const peakKeyForSize = isPaperForSize ? 'paper_peak_value' : 'peak_portfolio_value';
+  const peakStr = await getState(peakKeyForSize);
   const peakValue = peakStr ? Number(peakStr) : totalCapital;
   const drawdownPct = peakValue > 0 ? (peakValue - totalCapital) / peakValue : 0;
 

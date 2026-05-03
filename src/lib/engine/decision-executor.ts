@@ -18,7 +18,7 @@ import {
   getOrdersForPosition,
   updateOrder,
 } from '@/lib/db/queries/orders';
-import { setState } from '@/lib/db/queries/system-state';
+import { getState, setState } from '@/lib/db/queries/system-state';
 import { createAlert } from '@/lib/db/queries/alerts';
 import { getActiveTheses, createThesis, updateThesis, invalidateThesis } from '@/lib/db/queries/theses';
 import { insertRegimeAssessment } from '@/lib/db/queries/regime';
@@ -320,6 +320,18 @@ async function handleExit(
     realized_gain_loss: netPnl.toFixed(2),
   });
 
+  // Credit proceeds back to paper_cash_usd in paper mode
+  if (paperMode) {
+    const exitFee = exitPrice * qty * TAKER_FEE;
+    const proceeds = exitPrice * qty - exitFee;
+    const currentCashStr = await getState('paper_cash_usd');
+    const currentCash = currentCashStr ? Number(currentCashStr) : 0;
+    await setState('paper_cash_usd', String(currentCash + proceeds));
+    console.log(
+      `[DecisionExecutor] Paper cash credited: $${proceeds.toFixed(2)} from ${position.asset} exit. New balance: $${(currentCash + proceeds).toFixed(2)}`,
+    );
+  }
+
   result.tradesExecuted.push({
     asset: position.asset,
     type: position.type,
@@ -386,6 +398,18 @@ async function handleReduce(
     fillQuantity: paperMode ? sellQty.toPrecision(8) : undefined,
     isPaper: paperMode,
   });
+
+  // 2b. Credit partial proceeds back to paper_cash_usd in paper mode
+  if (paperMode) {
+    const sellFee = sellPrice * sellQty * TAKER_FEE;
+    const proceeds = sellPrice * sellQty - sellFee;
+    const currentCashStr = await getState('paper_cash_usd');
+    const currentCash = currentCashStr ? Number(currentCashStr) : 0;
+    await setState('paper_cash_usd', String(currentCash + proceeds));
+    console.log(
+      `[DecisionExecutor] Paper cash credited: $${proceeds.toFixed(2)} from ${position.asset} partial sell. New balance: $${(currentCash + proceeds).toFixed(2)}`,
+    );
+  }
 
   // 3. Update position quantity and conviction
   await updatePosition(position.id, {
