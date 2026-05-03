@@ -36,7 +36,11 @@ async function buildJwt(method: string, requestPath: string): Promise<string> {
   // Some secrets from Coinbase have escaped newlines; normalize them.
   const pemKey = apiSecret.replace(/\\n/g, '\n');
 
-  const privateKey = await importPKCS8(pemKey, 'ES256');
+  // Coinbase CDP keys are EC PEM (`BEGIN EC PRIVATE KEY`), but jose's
+  // importPKCS8 requires PKCS#8 (`BEGIN PRIVATE KEY`). Convert first.
+  const keyObject = crypto.createPrivateKey(pemKey);
+  const pkcs8Pem = keyObject.export({ type: 'pkcs8', format: 'pem' }) as string;
+  const privateKey = await importPKCS8(pkcs8Pem, 'ES256');
 
   const now = Math.floor(Date.now() / 1000);
   const nonce = crypto.randomBytes(16).toString('hex');

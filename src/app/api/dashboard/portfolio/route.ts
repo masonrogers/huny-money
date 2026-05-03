@@ -2,6 +2,17 @@ import { NextResponse } from 'next/server';
 import { getMultipleStates } from '@/lib/db/queries/system-state';
 import { getOpenPositions } from '@/lib/db/queries/positions';
 import { getAllBalances, getMidPrice } from '@/lib/coinbase';
+import { HARD_CIRCUIT_BREAKER, SOFT_CIRCUIT_BREAKER_PCT } from '@/lib/constants';
+import type { RegimeName } from '@/lib/types/strategy';
+
+// Regime exposure caps (mirrors risk-manager.ts)
+const REGIME_EXPOSURE_CAP: Record<RegimeName, number> = {
+  strong_bull: 0.70,
+  mild_bull: 0.70,
+  ranging: 0.50,
+  mild_bear: 0.30,
+  strong_bear: 0.10,
+};
 
 export const dynamic = 'force-dynamic';
 
@@ -20,13 +31,15 @@ export async function GET() {
         'trading_paused',
         'peak_portfolio_value',
         'starting_capital',
+        'strategy_version',
       ]),
       getAllBalances(['USD', 'BTC', 'ETH', 'SOL']),
     ]);
 
-    const regime = states['current_regime'] ?? 'ranging';
+    const regime = (states['current_regime'] ?? 'ranging') as RegimeName;
     const paperMode = states['paper_trading_mode'] === 'true';
     const tradingPaused = states['trading_paused'] === 'true';
+    const strategyVersion = states['strategy_version'] ?? '1.0';
     const peakValue = states['peak_portfolio_value']
       ? Number(states['peak_portfolio_value'])
       : 500;
@@ -50,17 +63,30 @@ export async function GET() {
     const drawdownPct =
       peakValue > 0 ? ((peakValue - totalValue) / peakValue) * 100 : 0;
 
+    // Regime exposure cap & remaining deployable
+    const regimeExposureCapPct = (REGIME_EXPOSURE_CAP[regime] ?? 0.50) * 100;
+    const maxDeployable = totalValue * (REGIME_EXPOSURE_CAP[regime] ?? 0.50);
+    const remainingDeployableUsd = Math.max(0, maxDeployable - deployedUsd);
+
+    // Circuit breakers
+    const softBreakerActive = drawdownPct >= SOFT_CIRCUIT_BREAKER_PCT * 100;
+    const hardBreakerActive = totalValue <= HARD_CIRCUIT_BREAKER;
+
     return NextResponse.json({
-      total_value: totalValue,
-      cash: cashUsd,
-      deployed: deployedUsd,
+      total_value_usd: totalValue,
+      cash_usd: cashUsd,
+      remaining_deployable_usd: Math.round(remainingDeployableUsd * 100) / 100,
       exposure_pct: Math.round(exposurePct * 100) / 100,
-      current_regime: regime,
+      regime,
+      regime_exposure_cap_pct: Math.round(regimeExposureCapPct * 100) / 100,
+      drawdown_from_peak_pct: Math.round(drawdownPct * 100) / 100,
+      peak_value_usd: peakValue,
+      positions: openPositions,
+      strategy_version: strategyVersion,
+      soft_breaker_active: softBreakerActive,
+      hard_breaker_active: hardBreakerActive,
       paper_mode: paperMode,
       trading_paused: tradingPaused,
-      drawdown_pct: Math.round(drawdownPct * 100) / 100,
-      peak_value: peakValue,
-      open_positions: openPositions.length,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
