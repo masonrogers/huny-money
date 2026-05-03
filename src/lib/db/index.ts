@@ -11,7 +11,11 @@ function getClient(): Sql {
     if (!connectionString) {
       throw new Error('DATABASE_URL is not set');
     }
-    _client = postgres(connectionString, { max: 5 });
+    _client = postgres(connectionString, {
+      max: 5,
+      ssl: 'require',
+      connect_timeout: 30,
+    });
   }
   return _client;
 }

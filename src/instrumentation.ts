@@ -8,5 +8,8 @@ export async function register() {
     } catch (error) {
       console.error('[Huny Money] Boot sequence failed:', error);
     }
+
+    const { startScheduler } = await import('@/lib/engine/scheduler');
+    startScheduler();
   }
 }
