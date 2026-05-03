@@ -47,20 +47,27 @@ export async function closePosition(
     .where(eq(positions.id, id));
 }
 
-export async function getOpenPositions(): Promise<Position[]> {
+export async function getOpenPositions(isPaper?: boolean): Promise<Position[]> {
+  const conditions = [eq(positions.status, 'open')];
+  if (isPaper !== undefined) {
+    conditions.push(eq(positions.isPaper, isPaper));
+  }
   return db
     .select()
     .from(positions)
-    .where(eq(positions.status, 'open'));
+    .where(and(...conditions));
 }
 
 export async function getClosedPositions(
-  filters?: { asset?: string; limit?: number; offset?: number }
+  filters?: { asset?: string; limit?: number; offset?: number; isPaper?: boolean }
 ): Promise<Position[]> {
   const conditions = [eq(positions.status, 'closed')];
 
   if (filters?.asset) {
     conditions.push(eq(positions.asset, filters.asset));
+  }
+  if (filters?.isPaper !== undefined) {
+    conditions.push(eq(positions.isPaper, filters.isPaper));
   }
 
   const query = db
@@ -91,28 +98,36 @@ export async function getPositionById(
   return row ?? null;
 }
 
-export async function countOpenPositions(): Promise<number> {
+export async function countOpenPositions(isPaper?: boolean): Promise<number> {
+  const conditions = [eq(positions.status, 'open')];
+  if (isPaper !== undefined) {
+    conditions.push(eq(positions.isPaper, isPaper));
+  }
   const [row] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(positions)
-    .where(eq(positions.status, 'open'));
+    .where(and(...conditions));
 
   return row?.count ?? 0;
 }
 
 export async function getRecentClosedPositions(
-  hours: number
+  hours: number,
+  isPaper?: boolean
 ): Promise<Position[]> {
   const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+
+  const conditions = [
+    eq(positions.status, 'closed'),
+    sql`${positions.exitTime} >= ${cutoff}`,
+  ];
+  if (isPaper !== undefined) {
+    conditions.push(eq(positions.isPaper, isPaper));
+  }
 
   return db
     .select()
     .from(positions)
-    .where(
-      and(
-        eq(positions.status, 'closed'),
-        sql`${positions.exitTime} >= ${cutoff}`
-      )
-    )
+    .where(and(...conditions))
     .orderBy(desc(positions.exitTime));
 }

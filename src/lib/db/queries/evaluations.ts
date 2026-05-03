@@ -13,12 +13,15 @@ export async function insertEvaluation(
 }
 
 export async function getEvaluations(
-  filters?: { type?: string; limit?: number; offset?: number }
+  filters?: { type?: string; limit?: number; offset?: number; isPaper?: boolean }
 ): Promise<Evaluation[]> {
   const conditions = [];
 
   if (filters?.type) {
     conditions.push(eq(evaluations.type, filters.type));
+  }
+  if (filters?.isPaper !== undefined) {
+    conditions.push(eq(evaluations.isPaper, filters.isPaper));
   }
 
   const query = db

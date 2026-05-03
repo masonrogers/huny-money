@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getOpenPositions, getClosedPositions } from '@/lib/db/queries/positions';
+import { getState } from '@/lib/db/queries/system-state';
 import { getMidPrice } from '@/lib/coinbase';
 
 export const dynamic = 'force-dynamic';
@@ -10,9 +11,10 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status') ?? 'open';
     const limit = parseInt(searchParams.get('limit') ?? '20', 10);
     const offset = parseInt(searchParams.get('offset') ?? '0', 10);
+    const isPaper = (await getState('paper_trading_mode')) === 'true';
 
     if (status === 'open') {
-      const positions = await getOpenPositions();
+      const positions = await getOpenPositions(isPaper);
 
       // Enrich open positions with current prices
       const enriched = await Promise.all(
@@ -60,7 +62,7 @@ export async function GET(request: NextRequest) {
         total: positions.length,
       });
     } else {
-      const closedPositions = await getClosedPositions({ limit, offset });
+      const closedPositions = await getClosedPositions({ limit, offset, isPaper });
 
       // Enrich closed positions with computed daysHeld
       const enriched = closedPositions.map((pos) => {

@@ -18,26 +18,25 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    // Fetch system state and open positions in parallel
-    const [
-      openPositions,
-      states,
-      balances,
-    ] = await Promise.all([
-      getOpenPositions(),
-      getMultipleStates([
-        'current_regime',
-        'paper_trading_mode',
-        'trading_paused',
-        'peak_portfolio_value',
-        'starting_capital',
-        'strategy_version',
-      ]),
+    // Fetch system state first to determine paper mode
+    const states = await getMultipleStates([
+      'current_regime',
+      'paper_trading_mode',
+      'trading_paused',
+      'peak_portfolio_value',
+      'starting_capital',
+      'strategy_version',
+    ]);
+
+    const paperMode = states['paper_trading_mode'] === 'true';
+
+    // Fetch positions (filtered by paper mode) and balances in parallel
+    const [openPositions, balances] = await Promise.all([
+      getOpenPositions(paperMode),
       getAllBalances(['USD', 'USDC', 'BTC', 'ETH', 'SOL']),
     ]);
 
     const regime = (states['current_regime'] ?? 'ranging') as RegimeName;
-    const paperMode = states['paper_trading_mode'] === 'true';
     const tradingPaused = states['trading_paused'] === 'true';
     const strategyVersion = states['strategy_version'] ?? '1.0';
     const peakValue = states['peak_portfolio_value']

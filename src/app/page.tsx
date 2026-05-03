@@ -119,15 +119,27 @@ export default function DashboardPage() {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-400">Paper Mode</span>
-              <span className="inline-flex items-center rounded-full bg-amber-900/50 border border-amber-600/40 px-2.5 py-0.5 text-xs font-medium text-amber-300">
-                ENABLED
-              </span>
+              {portfolio?.paperMode ? (
+                <span className="inline-flex items-center rounded-full bg-amber-900/50 border border-amber-600/40 px-2.5 py-0.5 text-xs font-medium text-amber-300">
+                  ENABLED
+                </span>
+              ) : (
+                <span className="inline-flex items-center rounded-full bg-emerald-900/50 border border-emerald-600/40 px-2.5 py-0.5 text-xs font-medium text-emerald-300">
+                  LIVE
+                </span>
+              )}
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-400">Trading Paused</span>
-              <span className="inline-flex items-center rounded-full bg-gray-700 border border-gray-600 px-2.5 py-0.5 text-xs font-medium text-gray-300">
-                NO
-              </span>
+              {portfolio?.tradingPaused ? (
+                <span className="inline-flex items-center rounded-full bg-red-900/50 border border-red-600/40 px-2.5 py-0.5 text-xs font-medium text-red-300">
+                  YES
+                </span>
+              ) : (
+                <span className="inline-flex items-center rounded-full bg-gray-700 border border-gray-600 px-2.5 py-0.5 text-xs font-medium text-gray-300">
+                  NO
+                </span>
+              )}
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-400">Strategy Version</span>

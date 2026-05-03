@@ -118,7 +118,8 @@ async function determineContext(): Promise<number | null> {
 async function reconcileOrders(
   result: ReconciliationResult
 ): Promise<void> {
-  const pendingOrders = await getPendingOrders();
+  // Only reconcile live (non-paper) orders against Coinbase
+  const pendingOrders = await getPendingOrders(false);
   console.log(`[Reconciliation] Found ${pendingOrders.length} pending orders to reconcile`);
 
   for (const order of pendingOrders) {
@@ -256,7 +257,8 @@ async function reconcileBalances(
 ): Promise<void> {
   try {
     const balances = await getAllBalances(['USD', 'BTC', 'ETH', 'SOL']);
-    const openPositions = await getOpenPositions();
+    // Only reconcile live (non-paper) positions against actual balances
+    const openPositions = await getOpenPositions(false);
 
     // Compute expected balances from DB state
     const expectedAssetQuantities: Record<string, number> = {};
@@ -319,7 +321,8 @@ async function reconcileBalances(
 async function verifyPositionSafety(
   result: ReconciliationResult
 ): Promise<void> {
-  const openPositions = await getOpenPositions();
+  // Only verify stop orders for live (non-paper) positions
+  const openPositions = await getOpenPositions(false);
 
   for (const position of openPositions) {
     try {

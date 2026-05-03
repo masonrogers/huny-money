@@ -233,8 +233,8 @@ async function isReviewDue(): Promise<boolean> {
 // ─── Data Assembly ────────────────────────────────────────────────────────────
 
 async function assembleReviewData(): Promise<StrategyReviewData> {
-  // Get closed positions for analysis
-  const closedPositions = await getClosedPositions({ limit: 50 });
+  // Get closed live positions for analysis (strategy review only uses real trades)
+  const closedPositions = await getClosedPositions({ limit: 50, isPaper: false });
 
   // Compute win rate
   const wins = closedPositions.filter((p) => p.netPnl && Number(p.netPnl) > 0);

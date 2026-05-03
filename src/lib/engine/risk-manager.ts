@@ -322,8 +322,9 @@ export async function checkDailyLossLimit(): Promise<{
   currentLoss: number;
   limit: number;
 }> {
-  // Get positions closed in the last 24 hours
-  const recentClosed = await getRecentClosedPositions(24);
+  // Get positions closed in the last 24 hours (filtered by current paper mode)
+  const isPaper = (await getState('paper_trading_mode')) === 'true';
+  const recentClosed = await getRecentClosedPositions(24, isPaper);
 
   // Sum negative net PnL (losses)
   const totalLoss = recentClosed.reduce((sum, pos) => {
@@ -355,8 +356,9 @@ export async function checkCooldown(): Promise<{
   inCooldown: boolean;
   consecutiveLosses: number;
 }> {
-  // Get last 2 closed positions
-  const recentClosed = await getClosedPositions({ limit: 2 });
+  // Get last 2 closed positions (filtered by current paper mode)
+  const isPaper = (await getState('paper_trading_mode')) === 'true';
+  const recentClosed = await getClosedPositions({ limit: 2, isPaper });
 
   if (recentClosed.length < CONSECUTIVE_LOSS_COOLDOWN) {
     return { inCooldown: false, consecutiveLosses: 0 };

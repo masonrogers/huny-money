@@ -94,6 +94,7 @@ export async function executeNewTrade(
       strategyVersion,
       regimeAtEntry: regime,
       entryOrderId,
+      isPaper: paperMode,
       feesPaid: paperMode
         ? String(costBasis * TAKER_FEE)
         : '0', // Real fees updated on fill
@@ -113,6 +114,7 @@ export async function executeNewTrade(
       filledAt: paperMode ? new Date() : undefined,
       fillPrice: paperMode ? String(fillPrice) : undefined,
       fillQuantity: paperMode ? quantityStr : undefined,
+      isPaper: paperMode,
     });
 
     // 8. Place stop-limit sell order
@@ -153,6 +155,7 @@ export async function executeNewTrade(
       status: 'pending',
       relatedPositionId: position.id,
       placedAt: new Date(),
+      isPaper: paperMode,
     });
 
     // 10. Place take-profit limit sell order
@@ -192,6 +195,7 @@ export async function executeNewTrade(
       status: 'pending',
       relatedPositionId: position.id,
       placedAt: new Date(),
+      isPaper: paperMode,
     });
 
     // 12. Update position with order IDs

@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { db } from '../index';
 import { orders } from '../schema';
 
@@ -20,11 +20,15 @@ export async function updateOrder(
     .where(eq(orders.id, id));
 }
 
-export async function getPendingOrders(): Promise<Order[]> {
+export async function getPendingOrders(isPaper?: boolean): Promise<Order[]> {
+  const conditions = [eq(orders.status, 'pending')];
+  if (isPaper !== undefined) {
+    conditions.push(eq(orders.isPaper, isPaper));
+  }
   return db
     .select()
     .from(orders)
-    .where(eq(orders.status, 'pending'));
+    .where(and(...conditions));
 }
 
 export async function getOrderByExchangeId(

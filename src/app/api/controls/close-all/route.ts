@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 export async function POST() {
   try {
     const paperMode = (await getState('paper_trading_mode')) === 'true';
-    const openPositions = await getOpenPositions();
+    const openPositions = await getOpenPositions(paperMode);
 
     if (openPositions.length === 0) {
       return NextResponse.json({

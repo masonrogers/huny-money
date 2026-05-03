@@ -50,11 +50,11 @@ function getNextEvaluationTime(): Date {
   return tomorrow;
 }
 
-async function buildPortfolioStateForRisk(): Promise<{
+async function buildPortfolioStateForRisk(isPaper: boolean): Promise<{
   portfolioState: PortfolioState;
   positionsWithPrice: PositionWithPrice[];
 }> {
-  const openPositions = await getOpenPositions();
+  const openPositions = await getOpenPositions(isPaper);
   const regime = ((await getState('current_regime')) ?? 'ranging') as PortfolioState['regime'];
   const peakStr = await getState('peak_portfolio_value');
   const peakValue = peakStr ? Number(peakStr) : 500;
@@ -289,12 +289,14 @@ export async function runEvaluation(
     });
 
     // Still log the evaluation even if parsing failed
+    const paperModeForLog = (await getState('paper_trading_mode')) === 'true';
     await insertEvaluation({
       timestamp: new Date(),
       type: evalType,
       opusResponse: { raw: rawResponse, parse_error: parseResult.error },
       actionsTaken: { error: 'parse_failed' },
       strategyVersion,
+      isPaper: paperModeForLog,
     });
     return;
   }
@@ -311,8 +313,11 @@ export async function runEvaluation(
     }
   }
 
+  // Read paper mode state (needed for risk assessment and execution)
+  const paperMode = (await getState('paper_trading_mode')) === 'true';
+
   // Step 11: Validate proposed trades via risk manager
-  const { portfolioState, positionsWithPrice } = await buildPortfolioStateForRisk();
+  const { portfolioState, positionsWithPrice } = await buildPortfolioStateForRisk(paperMode);
 
   const validatedTrades = [];
   const rejectedTrades = [];
@@ -366,8 +371,6 @@ export async function runEvaluation(
   };
 
   // Step 12: Execute approved decisions
-  const paperMode = (await getState('paper_trading_mode')) === 'true';
-
   let actionsResult: Awaited<ReturnType<typeof executeDecisions>> = {
     tradesExecuted: [],
     positionsUpdated: [],
@@ -403,6 +406,7 @@ export async function runEvaluation(
       errors: actionsResult.errors,
     },
     strategyVersion,
+    isPaper: paperMode,
   });
 
   // Step 14: Update next_evaluation_at

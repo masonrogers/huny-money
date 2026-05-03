@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getClosedPositions } from '@/lib/db/queries/positions';
+import { getState } from '@/lib/db/queries/system-state';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,8 +11,9 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get('limit') ?? '20', 10);
     const asset = searchParams.get('asset') ?? undefined;
     const offset = (page - 1) * limit;
+    const isPaper = (await getState('paper_trading_mode')) === 'true';
 
-    const closedPositions = await getClosedPositions({ asset, limit, offset });
+    const closedPositions = await getClosedPositions({ asset, limit, offset, isPaper });
 
     // Enrich with holdDurationDays for the frontend
     const trades = closedPositions.map((pos) => {

@@ -60,12 +60,14 @@ export const positions = pgTable(
     stopOrderId: text('stop_order_id'),
     tpOrderId: text('tp_order_id'),
     entryOrderId: text('entry_order_id'),
+    isPaper: boolean('is_paper').default(false).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     index('positions_status_idx').on(table.status),
     index('positions_asset_idx').on(table.asset),
+    index('positions_is_paper_idx').on(table.isPaper),
   ]
 );
 
@@ -87,12 +89,14 @@ export const orders = pgTable(
     fillPrice: numeric('fill_price'),
     fillQuantity: numeric('fill_quantity'),
     cancelReason: text('cancel_reason'),
+    isPaper: boolean('is_paper').default(false).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     index('orders_status_idx').on(table.status),
     index('orders_coinbase_order_id_idx').on(table.coinbaseOrderId),
+    index('orders_is_paper_idx').on(table.isPaper),
   ]
 );
 
@@ -124,11 +128,13 @@ export const evaluations = pgTable(
     opusResponse: jsonb('opus_response').notNull(),
     actionsTaken: jsonb('actions_taken'),
     strategyVersion: text('strategy_version').notNull(),
+    isPaper: boolean('is_paper').default(false).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     index('evaluations_type_idx').on(table.type),
     index('evaluations_timestamp_idx').on(table.timestamp),
+    index('evaluations_is_paper_idx').on(table.isPaper),
   ]
 );
 

@@ -46,3 +46,11 @@ export function useReconciliation() {
 export function useAlerts() {
   return useSWR('/api/dashboard/alerts?acknowledged=false&limit=20', fetcher, { refreshInterval: 15000 });
 }
+
+export function useSystemStatus() {
+  return useSWR<{ paperMode: boolean; tradingPaused: boolean }>(
+    '/api/dashboard/status',
+    fetcher,
+    { refreshInterval: 15000 }
+  );
+}

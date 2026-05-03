@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { mutate } from "swr";
+import { useSystemStatus } from "@/lib/hooks/use-api";
 
 interface ActionState {
   loading: boolean;
@@ -31,6 +33,11 @@ function useControlAction() {
               data.message || data.error || (res.ok ? "Success" : "Failed"),
           },
         });
+        // Revalidate system status and portfolio data after any control action
+        if (res.ok) {
+          mutate('/api/dashboard/status');
+          mutate('/api/dashboard/portfolio');
+        }
       } catch (err) {
         setState({
           loading: false,
@@ -86,6 +93,10 @@ export default function ControlsPage() {
   const reconAction = useControlAction();
   const regimeAction = useControlAction();
 
+  const { data: status } = useSystemStatus();
+  const isPaused = status?.tradingPaused ?? false;
+  const isPaper = status?.paperMode ?? true;
+
   const [confirmCloseAll, setConfirmCloseAll] = useState(false);
   const [regimeOverride, setRegimeOverride] = useState("ranging");
   const [regimeReason, setRegimeReason] = useState("");
@@ -115,7 +126,11 @@ export default function ControlsPage() {
                 })
               }
               disabled={pauseAction.loading}
-              className="flex-1 px-4 py-2 rounded-lg bg-red-700 hover:bg-red-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+              className={`flex-1 px-4 py-2 rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-50 ${
+                isPaused
+                  ? "bg-red-600 ring-2 ring-red-400"
+                  : "bg-red-700 hover:bg-red-600"
+              }`}
             >
               {pauseAction.loading ? "..." : "Pause"}
             </button>
@@ -126,7 +141,11 @@ export default function ControlsPage() {
                 })
               }
               disabled={pauseAction.loading}
-              className="flex-1 px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+              className={`flex-1 px-4 py-2 rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-50 ${
+                !isPaused
+                  ? "bg-emerald-600 ring-2 ring-emerald-400"
+                  : "bg-emerald-700 hover:bg-emerald-600"
+              }`}
             >
               {pauseAction.loading ? "..." : "Resume"}
             </button>
@@ -223,7 +242,11 @@ export default function ControlsPage() {
                 })
               }
               disabled={paperAction.loading}
-              className="flex-1 px-4 py-2 rounded-lg bg-amber-700 hover:bg-amber-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+              className={`flex-1 px-4 py-2 rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-50 ${
+                isPaper
+                  ? "bg-amber-600 ring-2 ring-amber-400"
+                  : "bg-amber-700 hover:bg-amber-600"
+              }`}
             >
               {paperAction.loading ? "..." : "Paper Mode"}
             </button>
@@ -234,7 +257,11 @@ export default function ControlsPage() {
                 })
               }
               disabled={paperAction.loading}
-              className="flex-1 px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+              className={`flex-1 px-4 py-2 rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-50 ${
+                !isPaper
+                  ? "bg-emerald-600 ring-2 ring-emerald-400"
+                  : "bg-emerald-700 hover:bg-emerald-600"
+              }`}
             >
               {paperAction.loading ? "..." : "Live Mode"}
             </button>

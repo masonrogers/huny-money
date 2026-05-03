@@ -225,7 +225,8 @@ function computeTechnicals(
 // ─── Portfolio state assembly ──────────────────────────────────────────────
 
 async function assemblePortfolioState(): Promise<PortfolioData> {
-  const openPositions = await getOpenPositions();
+  const paperMode = (await getState('paper_trading_mode')) === 'true';
+  const openPositions = await getOpenPositions(paperMode);
   const states = await getMultipleStates([
     'current_regime',
     'peak_portfolio_value',
@@ -366,7 +367,8 @@ async function assemblePortfolioState(): Promise<PortfolioData> {
 // ─── Trade history ─────────────────────────────────────────────────────────
 
 async function assembleTradeHistory(): Promise<TradeHistoryEntry[]> {
-  const closedPositions = await getClosedPositions({ limit: 50 });
+  const paperMode = (await getState('paper_trading_mode')) === 'true';
+  const closedPositions = await getClosedPositions({ limit: 50, isPaper: paperMode });
 
   return closedPositions.map((pos) => {
     const entryPrice = Number(pos.entryPrice);

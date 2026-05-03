@@ -64,8 +64,8 @@ export async function executeDecisions(
     await processLayer1(output, result);
   }
 
-  // Process existing position actions
-  const openPositions = await getOpenPositions();
+  // Process existing position actions (filter by current paper mode)
+  const openPositions = await getOpenPositions(paperMode);
   for (const action of output.layer_2.existing_positions) {
     try {
       await processPositionAction(action, openPositions, paperMode, result);
@@ -301,6 +301,7 @@ async function handleExit(
     filledAt: paperMode ? new Date() : undefined,
     fillPrice: paperMode ? String(exitPrice) : undefined,
     fillQuantity: paperMode ? String(quantity) : undefined,
+    isPaper: paperMode,
   });
 
   // 4. Compute P&L and close position
@@ -383,6 +384,7 @@ async function handleReduce(
     filledAt: paperMode ? new Date() : undefined,
     fillPrice: paperMode ? String(sellPrice) : undefined,
     fillQuantity: paperMode ? sellQty.toPrecision(8) : undefined,
+    isPaper: paperMode,
   });
 
   // 3. Update position quantity and conviction
@@ -446,6 +448,7 @@ async function handleReduce(
       status: 'pending',
       relatedPositionId: position.id,
       placedAt: new Date(),
+      isPaper: paperMode,
     });
 
     await updatePosition(position.id, { stopOrderId: newStopId });
