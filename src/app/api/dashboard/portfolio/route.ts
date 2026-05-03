@@ -33,7 +33,7 @@ export async function GET() {
         'starting_capital',
         'strategy_version',
       ]),
-      getAllBalances(['USD', 'BTC', 'ETH', 'SOL']),
+      getAllBalances(['USD', 'USDC', 'BTC', 'ETH', 'SOL']),
     ]);
 
     const regime = (states['current_regime'] ?? 'ranging') as RegimeName;
@@ -44,7 +44,7 @@ export async function GET() {
       ? Number(states['peak_portfolio_value'])
       : 500;
 
-    const cashUsd = balances.USD?.available ?? 0;
+    const cashUsd = (balances.USD?.available ?? 0) + (balances.USDC?.available ?? 0);
 
     // Calculate deployed value from open positions with live prices
     let deployedUsd = 0;
