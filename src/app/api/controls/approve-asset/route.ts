@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
     await setState('approved_tertiary_assets', JSON.stringify(approvedAssets));
 
     return NextResponse.json({
+      message: `Asset "${upperAsset}" ${approved ? 'approved' : 'removed'} successfully`,
       approved_tertiary_assets: approvedAssets,
       timestamp: new Date().toISOString(),
     });

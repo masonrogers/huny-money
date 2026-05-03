@@ -8,6 +8,7 @@ export async function POST() {
     const result = await runFullReconciliation();
     return NextResponse.json({
       success: true,
+      message: 'Reconciliation completed successfully',
       ...result,
       timestamp: new Date().toISOString(),
     });

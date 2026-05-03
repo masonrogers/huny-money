@@ -27,7 +27,8 @@ function useControlAction() {
           loading: false,
           result: {
             success: res.ok,
-            message: data.message || (res.ok ? "Success" : "Failed"),
+            message:
+              data.message || data.error || (res.ok ? "Success" : "Failed"),
           },
         });
       } catch (err) {
@@ -110,7 +111,7 @@ export default function ControlsPage() {
             <button
               onClick={() =>
                 pauseAction.execute("/api/controls/pause", {
-                  action: "pause",
+                  paused: true,
                 })
               }
               disabled={pauseAction.loading}
@@ -121,7 +122,7 @@ export default function ControlsPage() {
             <button
               onClick={() =>
                 pauseAction.execute("/api/controls/pause", {
-                  action: "resume",
+                  paused: false,
                 })
               }
               disabled={pauseAction.loading}
@@ -217,7 +218,7 @@ export default function ControlsPage() {
           <div className="flex gap-2">
             <button
               onClick={() =>
-                paperAction.execute("/api/controls/paper-mode", {
+                paperAction.execute("/api/controls/toggle-paper", {
                   enabled: true,
                 })
               }
@@ -228,7 +229,7 @@ export default function ControlsPage() {
             </button>
             <button
               onClick={() =>
-                paperAction.execute("/api/controls/paper-mode", {
+                paperAction.execute("/api/controls/toggle-paper", {
                   enabled: false,
                 })
               }

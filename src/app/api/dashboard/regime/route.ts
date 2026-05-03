@@ -19,16 +19,21 @@ export async function GET() {
     // Extract BTC benchmark data from equity snapshots
     const btcBenchmark = equitySnapshots.map((s) => ({
       timestamp: s.timestamp,
-      total_value_usd: Number(s.totalValueUsd),
-      btc_price: Number(s.btcPrice),
-      btc_hold_value: Number(s.btcHoldValue),
+      totalValueUsd: Number(s.totalValueUsd),
+      btcPrice: Number(s.btcPrice),
+      btcHoldValue: Number(s.btcHoldValue),
     }));
 
+    // Get latest regime evidence from history
+    const latestRegimeEntry = regimeHistory.length > 0 ? regimeHistory[0] : null;
+
     return NextResponse.json({
-      current_regime: currentRegime ?? 'ranging',
-      regime_history: regimeHistory,
-      active_theses: activeTheses,
-      btc_benchmark: btcBenchmark,
+      currentRegime: currentRegime ?? 'ranging',
+      regimeEvidence: latestRegimeEntry?.evidence ?? null,
+      assessedAt: latestRegimeEntry?.assessedAt ?? null,
+      theses: activeTheses,
+      history: regimeHistory,
+      btcBenchmark,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

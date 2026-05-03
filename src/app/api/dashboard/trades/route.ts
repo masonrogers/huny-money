@@ -11,7 +11,28 @@ export async function GET(request: NextRequest) {
     const asset = searchParams.get('asset') ?? undefined;
     const offset = (page - 1) * limit;
 
-    const trades = await getClosedPositions({ asset, limit, offset });
+    const closedPositions = await getClosedPositions({ asset, limit, offset });
+
+    // Enrich with holdDurationDays for the frontend
+    const trades = closedPositions.map((pos) => {
+      const holdDurationDays =
+        pos.entryTime && pos.exitTime
+          ? Math.max(
+              0,
+              Math.floor(
+                (new Date(pos.exitTime).getTime() -
+                  new Date(pos.entryTime).getTime()) /
+                  (1000 * 60 * 60 * 24)
+              )
+            )
+          : 0;
+
+      return {
+        ...pos,
+        holdDurationDays,
+        closedAt: pos.exitTime ? new Date(pos.exitTime).toISOString() : null,
+      };
+    });
 
     return NextResponse.json({
       trades,

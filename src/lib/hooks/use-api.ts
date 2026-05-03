@@ -1,9 +1,19 @@
 import useSWR from 'swr';
 
-const fetcher = (url: string) => fetch(url).then(r => {
-  if (!r.ok) throw new Error(`API error: ${r.status}`);
+const fetcher = async (url: string) => {
+  const r = await fetch(url);
+  if (!r.ok) {
+    let message = `API error: ${r.status}`;
+    try {
+      const body = await r.json();
+      if (body.error) message = body.error;
+    } catch {
+      // Response was not JSON, use default message
+    }
+    throw new Error(message);
+  }
   return r.json();
-});
+};
 
 export function usePortfolio() {
   return useSWR('/api/dashboard/portfolio', fetcher, { refreshInterval: 30000 });

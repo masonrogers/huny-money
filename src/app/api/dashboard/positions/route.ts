@@ -27,17 +27,27 @@ export async function GET(request: NextRequest) {
           const quantity = Number(pos.quantity);
           const entryPrice = Number(pos.entryPrice);
           const costBasis = Number(pos.costBasis);
-          const positionValue = currentPrice * quantity;
-          const unrealizedPnlUsd = positionValue - costBasis;
+          const positionValueUsd = currentPrice * quantity;
+          const unrealizedPnlUsd = positionValueUsd - costBasis;
           const unrealizedPnlPct =
             costBasis > 0 ? (unrealizedPnlUsd / costBasis) * 100 : 0;
+          const daysHeld = pos.entryTime
+            ? Math.max(
+                0,
+                Math.floor(
+                  (Date.now() - new Date(pos.entryTime).getTime()) /
+                    (1000 * 60 * 60 * 24)
+                )
+              )
+            : 0;
 
           return {
             ...pos,
             currentPrice,
-            positionValue,
+            positionValueUsd,
             unrealizedPnlUsd: Math.round(unrealizedPnlUsd * 100) / 100,
             unrealizedPnlPct: Math.round(unrealizedPnlPct * 100) / 100,
+            daysHeld,
           };
         })
       );
@@ -50,11 +60,31 @@ export async function GET(request: NextRequest) {
         total: positions.length,
       });
     } else {
-      const positions = await getClosedPositions({ limit, offset });
+      const closedPositions = await getClosedPositions({ limit, offset });
+
+      // Enrich closed positions with computed daysHeld
+      const enriched = closedPositions.map((pos) => {
+        const daysHeld =
+          pos.entryTime && pos.exitTime
+            ? Math.max(
+                0,
+                Math.floor(
+                  (new Date(pos.exitTime).getTime() -
+                    new Date(pos.entryTime).getTime()) /
+                    (1000 * 60 * 60 * 24)
+                )
+              )
+            : 0;
+
+        return {
+          ...pos,
+          daysHeld,
+        };
+      });
 
       return NextResponse.json({
-        positions,
-        total: positions.length,
+        positions: enriched,
+        total: enriched.length,
       });
     }
   } catch (err) {

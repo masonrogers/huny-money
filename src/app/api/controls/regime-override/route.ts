@@ -49,6 +49,7 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json({
+      message: `Regime overridden to "${regime}" successfully`,
       regime,
       reason,
       timestamp: new Date().toISOString(),

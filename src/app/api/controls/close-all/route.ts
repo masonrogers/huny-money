@@ -111,8 +111,10 @@ export async function POST() {
       }
     }
 
+    const closedCount = results.filter((r) => r.success).length;
     return NextResponse.json({
-      closed: results.filter((r) => r.success).length,
+      message: `Closed ${closedCount} of ${results.length} positions`,
+      closed: closedCount,
       results,
     });
   } catch (err) {

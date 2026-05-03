@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json({
+      message: `Trading ${paused ? 'paused' : 'resumed'} successfully`,
       trading_paused: paused,
       timestamp: new Date().toISOString(),
     });

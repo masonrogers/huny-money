@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json({
+      message: `Paper trading mode ${enabled ? 'enabled' : 'disabled'} successfully`,
       paper_trading_mode: enabled,
       timestamp: new Date().toISOString(),
     });
