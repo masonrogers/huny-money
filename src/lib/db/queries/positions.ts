@@ -1,4 +1,4 @@
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, gte, sql } from "drizzle-orm";
 import { db } from "../index";
 import { positions } from "../schema";
 import type { NewPosition, Position } from "../schema";
@@ -48,6 +48,46 @@ export async function closedPositionsForCurrentMode(limit?: number): Promise<Pos
     .where(and(eq(positions.paperMode, mode === "paper"), eq(positions.status, "closed")))
     .orderBy(desc(positions.exitTime));
   return limit ? q.limit(limit) : q;
+}
+
+/**
+ * Returns the most recent closed alt_cycle positions in the current mode.
+ * Used by the cooldown breaker (last 2 to detect 2-loss streak).
+ */
+export async function recentClosedAltCyclesForCurrentMode(limit: number): Promise<Position[]> {
+  const mode = getCurrentMode();
+  return db
+    .select()
+    .from(positions)
+    .where(
+      and(
+        eq(positions.paperMode, mode === "paper"),
+        eq(positions.status, "closed"),
+        eq(positions.type, "alt_cycle"),
+      ),
+    )
+    .orderBy(desc(positions.exitTime))
+    .limit(limit);
+}
+
+/**
+ * Counts closed alt_cycle positions in the current mode whose exitTime is on
+ * or after `since`. Used by Phase 1 criteria evaluation.
+ */
+export async function closedAltCycleCountSinceForCurrentMode(since: Date): Promise<number> {
+  const mode = getCurrentMode();
+  const rows = await db
+    .select({ count: sql<string>`COUNT(*)` })
+    .from(positions)
+    .where(
+      and(
+        eq(positions.paperMode, mode === "paper"),
+        eq(positions.status, "closed"),
+        eq(positions.type, "alt_cycle"),
+        gte(positions.exitTime, since),
+      ),
+    );
+  return Number(rows[0]?.count ?? 0);
 }
 
 export async function positionByIdForCurrentMode(id: string): Promise<Position | null> {
