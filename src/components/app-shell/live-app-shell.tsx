@@ -1,6 +1,7 @@
 "use client";
 
 import { AppShell } from "./index";
+import { StatusWatcher } from "./status-watcher";
 import { useApi } from "@/lib/hooks/api";
 import type { DashboardStatusPayload } from "@/app/api/dashboard/status/route";
 
@@ -26,6 +27,7 @@ export function LiveAppShell({ children }: { children: React.ReactNode }) {
       paused={data?.paused ?? false}
       modeChangePending={data?.modeChangePending ?? false}
     >
+      <StatusWatcher status={data} />
       {children}
     </AppShell>
   );

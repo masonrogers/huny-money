@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,19 +13,15 @@ import type { DashboardStatusPayload } from "@/app/api/dashboard/status/route";
 export default function ControlsPage() {
   const { data, mutate } = useApi<DashboardStatusPayload>("/api/dashboard/status");
   const [busy, setBusy] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<{ tone: "success" | "danger"; text: string } | null>(
-    null,
-  );
 
   async function pauseTrading(paused: boolean) {
     setBusy(paused ? "pause" : "resume");
-    setFeedback(null);
     try {
       await apiPost("/api/controls/pause", { paused });
-      setFeedback({ tone: "success", text: paused ? "Trading paused" : "Trading resumed" });
+      toast.success(paused ? "Trading paused" : "Trading resumed");
       await mutate();
     } catch (err) {
-      setFeedback({ tone: "danger", text: (err as Error).message });
+      toast.error((err as Error).message);
     } finally {
       setBusy(null);
     }
@@ -32,16 +29,16 @@ export default function ControlsPage() {
 
   async function forceBrief() {
     setBusy("brief");
-    setFeedback(null);
     try {
       const res = await fetch("/api/controls/force-brief", { method: "POST" });
       const body = await res.json();
-      setFeedback({
-        tone: res.ok ? "success" : "danger",
-        text: body.message ?? (res.ok ? "Forced brief" : "Failed"),
-      });
+      if (res.ok) {
+        toast.success(body.message ?? "Forced brief");
+      } else {
+        toast.warning(body.message ?? "Force-brief stub returned 501");
+      }
     } catch (err) {
-      setFeedback({ tone: "danger", text: (err as Error).message });
+      toast.error((err as Error).message);
     } finally {
       setBusy(null);
     }
@@ -55,18 +52,6 @@ export default function ControlsPage() {
         title="Controls"
         description="Manual interventions. Each action is logged to app_decisions for the audit trail."
       />
-
-      {feedback && (
-        <div
-          className={`text-sm rounded-md px-4 py-3 border ${
-            feedback.tone === "success"
-              ? "bg-[var(--color-success-bg)] border-[var(--color-success)]/30 text-[var(--color-success)]"
-              : "bg-[var(--color-danger-bg)] border-[var(--color-danger)]/30 text-[var(--color-danger)]"
-          }`}
-        >
-          {feedback.text}
-        </div>
-      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>
