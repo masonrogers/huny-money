@@ -44,3 +44,6 @@ next-env.d.ts
 
 # drizzle
 drizzle/meta
+
+# playwright mcp artifacts
+.playwright-mcp/
