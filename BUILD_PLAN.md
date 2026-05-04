@@ -11,7 +11,7 @@ This document says *how and in what order* to build what `STRATEGY.md` specifies
 
 10 sequenced phases. The critical path is sequential through Phase 9; the frontend (Phase 6+) starts in parallel after the data layer (Phase 1) lands. Each phase has a **validation gate** — do not advance until the gate passes.
 
-Estimated wall-clock for the critical path with one developer + AI assistance: **~5–7 weeks to start of paper trading**. The 30-day paper window (Phase 10) and the 30-day half-size live window add another ~9 weeks before full-size live, per `STRATEGY.md §6.3`.
+Estimated wall-clock for the critical path with one developer + AI assistance: **~5–7 weeks to start of paper trading**. The 60-day paper window (Phase 10) and the 60-day half-size live window add another ~17 weeks before full-size live, per `STRATEGY.md §6.3`. The longer paper window is intentional: regime detection is the primary alpha source and 30 days isn't enough to validate it across changing market conditions.
 
 ---
 
@@ -57,8 +57,11 @@ The data layer and the core write utilities everything else depends on. Comprehe
 - Project skeleton: Next.js 16 App Router, Tailwind v4, TypeScript strict
 - Drizzle config + lazy DB init (proxy-based, deferred until first use)
 - All 12 tables in `src/lib/db/schema.ts` with foreign keys
+- `positions.type` enum: `btc_core | alt_cycle` (per `STRATEGY.md §7`)
 - `paper_mode` column on `positions` and `orders` is `NOT NULL` (per `STRATEGY.md §13.3`)
 - State table includes mode-split keys (`peak_value_paper_usd`, `peak_value_live_usd`, etc., per `STRATEGY.md §7.1`)
+- State table includes per-asset cycle range keys (`cycle_low_zone_top_AERO`, `cycle_high_zone_bottom_AERO`, `cycle_range_computed_at_AERO`, etc., one set per watchlist asset, per `STRATEGY.md §7.1`)
+- State table includes regime tracking keys (`days_in_current_regime`, `last_regime_change_at`, `btc_dominance_30d_avg`)
 - `npx drizzle-kit push --force` runs successfully against DO Postgres
 - Query helpers in `src/lib/db/queries/` (one file per table). Two helpers for positions/orders:
   - `positionsForCurrentMode()` and `ordersForCurrentMode()` — defaults, mode-filtered
@@ -117,26 +120,29 @@ Wrap Anthropic and Coinbase. Implement the budget gate.
 The core logic. Highest design risk in the project. Spend time on prompts.
 
 **Deliverables:**
-- **Opus system prompt** for morning brief (per `STRATEGY.md §5.9`)
-- **Sonnet system prompt** for watcher (per §5.9)
-- **Full data package builder** for Opus (§5.3)
-- **Slim data package builder** for Sonnet (§5.4)
+- **Opus system prompt** for morning brief (per `STRATEGY.md §5.8`) — emphasizes "BTC is the default", "bear means cash, no exceptions", "you are not a swing trader"
+- **Sonnet system prompt** for watcher (per `STRATEGY.md §5.8`) — routing-only mandate, cannot place orders
+- **Full data package builder** for Opus (per `STRATEGY.md §5.3`): portfolio state with mode-correct values, BTC/ETH multi-timeframe candles, BTC.D trend, per-watchlist-alt cycle position (% of 6-month range), 30d volume vs 90d avg, recent news, yesterday's brief + outcomes, BTC benchmark assessment
+- **Slim data package builder** for Sonnet (per `STRATEGY.md §5.4`): morning brief summary + current prices + active alt cycle positions vs zones + watch list state
 - App-side indicator computation: RSI(14), MACD(12,26,9), BBands(20,2), 50d/200d MA, ATR(14), 20d avg volume, BTC.D
+- **Cycle range computer:** for each watchlist asset, computes `cycle_low_zone_top` and `cycle_high_zone_bottom` from 180 days of daily closes (top of bottom 30%, bottom of top 25%); stores in `state` table; refreshed nightly at 00:00 UTC
 - Compressed candle CSV serializer (compact strings, not arrays of OHLCV objects)
-- Response parsers with strict zod schema validation
+- Response parsers with strict zod schema validation against the v3 morning brief schema (regime + regime_evidence + btc_core_decision + alt_positions + alt_entry_candidates + watch_list + btc_benchmark_assessment + discipline_check)
 - Malformed response → log error, no silent fallback
-- **Morning brief flow:** assemble package → call Opus → parse → persist watch list to `triggers` → return decisions to executor
+- **Morning brief flow:** assemble package → call Opus → parse → persist watch list to `triggers` → return decisions (BTC core action + alt entry candidates + alt position actions) to executor
 - **Sonnet watcher flow:** assemble slim package → call Sonnet → parse → if `escalate: true`, call Opus with escalation context (slim package + trigger context)
 - Today's morning brief cached in memory and DB; passed fresh as ~500 token summary to each Sonnet check (NOT relying on prompt cache TTL)
 - Watch list expires at next morning's brief
 
 **Tests:**
-- Canned morning brief input produces structured response with valid schema
+- Canned morning brief input produces structured response with valid v3 schema
+- Cycle range computation produces correct zones for synthetic 180-day price series
 - Canned Sonnet escalation flows through to a (mocked) Opus call
 - Malformed Opus response causes an error, not silent fallback
 - **No Sonnet response can result in an order action without an intermediate Opus call** (this test is non-negotiable)
+- Opus prompt explicitly produces a `bear → 100% cash` recommendation when fed bear-regime synthetic conditions (regime discipline test)
 
-**Gate:** can run a manual morning brief end-to-end, see watch list in DB, run a manual Sonnet check, see escalation decision logged. Operator reads the morning brief output and approves coherence.
+**Gate:** can run a manual morning brief end-to-end, see watch list in DB, run a manual Sonnet check, see escalation decision logged. Operator reads the morning brief output and approves regime call coherence.
 
 ---
 
@@ -160,15 +166,17 @@ This phase is sized larger than the original ~7 days because the executor split,
 
 **Deliverables:**
 - Order placement: limit, stop-limit, take-profit, market exit, DCA limit
-- Stop adjustment: cancel old stop on Coinbase, place new at adjusted level — atomic w.r.t. position safety. If cancel succeeds but place fails, reconciliation places one immediately on next boot.
-- Take-profit staged exit: 50% off at first target; trail remainder per `STRATEGY.md §3.7`
+- Stop adjustment for alt positions: cancel old stop on Coinbase, place new at adjusted level — atomic w.r.t. position safety. If cancel succeeds but place fails, reconciliation places one immediately on next boot.
+- Trailing stop logic for alt cycle positions per `STRATEGY.md §3.7` (initial 12% soft stop; ratchet to breakeven at +25%, +20% at +50%, +40% at +75%, +65% at +100%)
+- Laddered cycle exits per `STRATEGY.md §3.5`: when AI decides to take cycle-high profits, place 1/3 immediate sell + 1/3 split across next 5-10 days + 1/3 trailed
+- BTC core has NO trailing stop — exited only by regime change via DCA-out tranches
 - In-method assertion guarding actual Coinbase calls (defense in depth on top of file isolation)
 
 ### 4C. Paper executor
 
 **Deliverables:**
 - Receives the same `placeOrder()` calls the live executor would
-- Same validation as live (R:R ≥ 2, stop in range, size in range, etc.) — validation logic lives in shared module imported by both
+- Same validation as live (cycle position confirmed for alt entries, position size in range, regime-allowed for asset type, etc.) — validation logic lives in shared module imported by both
 - Generates synthetic order IDs (`paper-{uuid}`)
 - Writes to `orders` with `paper_mode = true`
 - Simulates fills against **real Coinbase prices** from `market-data.ts` (not a mock feed)
@@ -194,13 +202,26 @@ This phase is sized larger than the original ~7 days because the executor split,
 
 **Deliverables:**
 - Position state machine: `planned → entry_pending → open → managed → closing → closed`
+- **BTC core management:** DCA in/out across regime transitions per `STRATEGY.md §3.3`
+  - Bull regime entry: 3-5 DCA tranches over 5-10 days (target 70% allocation)
+  - Chop regime entry: same DCA pattern (target 50% allocation)
+  - Bear regime exit: laddered sell over 2-3 days (target 0%)
+  - Re-entry from bear: DCA back in over 5-10 days
+- **Alt cycle entry executor:** validates all 7 entry conditions per `STRATEGY.md §3.4`, then places 2 ladder entries spread over 24h
+- **Alt cycle exit executor:** handles all 6 exit conditions per `STRATEGY.md §3.5`
+  - Cycle high reached → laddered sell 1/3 + 1/3 + 1/3
+  - Cycle invalidation → immediate market exit
+  - Regime shift to bear → exit ALL alts immediately, no exceptions
+  - Time decay (12 weeks flat) → reassess; force exit at 6 months max
+- **14-day re-entry cooldown:** after exiting an alt on cycle invalidation, that asset cannot be re-entered for 14 days
 - Boot reconciliation (per `STRATEGY.md §6.1`), mode-aware per `STRATEGY.md §13.7`:
   - Paper boot: queries paper rows only, verifies internal consistency
   - Live boot: queries live rows only, reconciles against Coinbase
   - **Cross-mode boot rejection:** boot REFUSES to start if it finds open positions in the OTHER mode, with actionable error message
   - Order status sync from Coinbase (live mode only)
   - Balance reconciliation, >1% discrepancy alerts (live mode only)
-  - **Position safety check** — places stop if missing (highest priority; works in both modes against the appropriate order set)
+  - **Position safety check** — places trailing stop on alt positions if missing (highest priority for alts; BTC core has no stop)
+  - Verify cycle range computations are current (<24h old) for all watchlist assets; recompute if stale
   - Missed evaluation detection
   - 5%+ price move during downtime detection
 - Force reconciliation API for manual trigger
@@ -225,31 +246,42 @@ All tests from `STRATEGY.md §13.8` MUST pass before this phase can complete:
 
 ## Phase 5 — Wake-up triggers, scheduling, risk (M, ~5 days)
 
-The cron loop, the wake-up triggers, the circuit breakers.
+The cron loop, the wake-up triggers, the cycle range refresh, the circuit breakers.
 
 **Deliverables:**
 - 5-minute price polling loop (in-process via `setInterval`, restart-safe via DB-stored `state.next_eval_at`)
-- **Wake-up trigger 1:** position move >3% in 1h with 30-min debounce per asset
+- **Wake-up trigger 1:** position move >5% in 4h with 60-min debounce per asset (wider than swing because cycle alts are intentionally volatile)
 - **Wake-up trigger 2:** stop fill (poll Coinbase order status), no debounce
-- **Wake-up trigger 3:** news keyword match from RSS poller, 15-min debounce per keyword
+- **Wake-up trigger 3:** news keyword match from RSS poller, 30-min debounce per keyword
 - Wake-up dispatch: log to `wakeups`, check budget, call Sonnet
-- Scheduler: in-process loop fires Opus morning brief at 14:00 UTC and Sonnet checks at 18:00/22:00/02:00/06:00/10:00 UTC
+- **Scheduler:** in-process loop fires:
+  - Opus morning brief at 14:00 UTC
+  - Sonnet watch checkpoints at 06:00 and 22:00 UTC (only 2/day vs swing's 5)
+  - Cycle range nightly recomputation at 00:00 UTC
+- **Position sizing logic** (regime-driven, per `STRATEGY.md §3.6`):
+  - BTC core target = 70% (bull) / 50% (chop) / 0% (bear)
+  - Single alt position: 10-15% of capital
+  - Max total alt allocation: 30%
+  - Min cash by regime: 0% (bull) / 20% (chop) / 100% (bear)
 - All circuit breakers (each tested individually):
-  - Soft (20% drawdown from peak): halve all subsequent sizes
+  - Soft (20% drawdown from peak): halve all subsequent ALT position sizes (BTC core unchanged)
   - Hard ($300 floor): immediate halt + alert
   - Daily loss cap (4% rolling 24h): block new entries
-  - Cooldown (2 consecutive losses): 24h block before next entry
-  - 60-day BTC underperformance: pause + alert + present operator decision
+  - Cooldown (2 consecutive losing alt cycles): **14-day** block before next alt entry (BTC core unaffected) — wider than swing's 24h because cycles span weeks
+  - 60-day BTC underperformance: pause + alert + present operator decision (restart vs convert to BTC core hold)
 - Phase gating logic: paper-mode toggle rejected if Phase 1 criteria not met
 
 **Tests:**
-- Each of 3 wake-up triggers fires on synthetic condition
+- Each of 3 wake-up triggers fires on synthetic condition with v3 thresholds
 - Each wake-up trigger respects debounce across restarts (debounce state in `state` table)
+- Cycle range nightly job runs at 00:00 UTC and updates state correctly
+- Position sizing returns correct allocation for each (regime, asset_type, current portfolio) combo
 - Hard circuit breaker triggers on $300 sim
-- Cooldown blocks entry after 2 consecutive losses
+- Cooldown blocks alt entry after 2 consecutive losses but allows BTC core management
+- 60-day BTC underperformance gate triggers at correct threshold
 - Phase 1 toggle gate rejects with criteria failing
 
-**Gate:** trigger a synthetic wake-up, see Sonnet called, see escalation decision logged. Trigger synthetic circuit breaker, see appropriate halt.
+**Gate:** trigger a synthetic wake-up, see Sonnet called, see escalation decision logged. Trigger synthetic circuit breaker, see appropriate halt. Verify cycle range job updates correctly.
 
 ---
 
@@ -284,14 +316,15 @@ Each view requires: API route(s) for data, the view component, real-time updates
 
 | Sub-phase | View | Size | Notes |
 |---|---|---|---|
-| 7.1 | Overview | M, ~2d | Header, ticker strip, equity curve, plan summary, positions, activity, spend, quick actions |
-| 7.2 | Today's Plan | M, ~2d | Morning brief beautifully rendered, regime card, trade cards, watch list with live trigger states, discipline check |
+| 7.1 | Overview | M, ~2d | Header (regime + days in regime + paused/halted), ticker strip (BTC/ETH + watchlist alts), **BTC benchmark cumulative perf as DOMINANT metric**, equity curve with BTC overlay, BTC core card, alt position cards, recent activity, API spend, quick actions |
+| 7.2 | Today's Plan | M, ~2d | Morning brief beautifully rendered. Regime + 7-day regime history strip, BTC core decision (DCA in/hold/DCA out/exit) with reasoning, **alt watchlist with each asset's cycle position visualized as a colored bar (cycle low → mid → cycle high)**, active alt positions with cycle progress, discipline check |
 | 7.3 | AI Activity | L, ~3d | Most important page. Chronological feed, expandable entries with full prompt/response/reasoning/actions, search, special morning brief cards |
-| 7.4 | Positions | M, ~2d | Open position cards with timeline, closed positions table with sort/filter, trade lifecycle view |
-| 7.5 | Decisions & Triggers | M, ~2d | Watch list, wake-up history, wake-up stats, app decision stream, state change log |
-| 7.6 | Performance | M, ~2d | Equity curve with BTC overlay (Recharts), drawdown, P&L breakdown, R-multiple distribution, fee drag |
-| 7.7 | System | M, ~2d | Boot history, error log, API budget detail, cache hit rates, last successful action, phase progress |
-| 7.8 | Controls | S, ~1d | Pause/resume, close all, force brief, force reconcile, paper/live toggle (gated), convert to BTC core hold, params view + edit |
+| 7.4 | Positions | M, ~2d | Open position cards (BTC core + alt cycles separately) with timeline, closed positions table with sort/filter, trade lifecycle view |
+| 7.5 | Cycle Position | M, ~2d | **NEW v3 view.** Per watchlist asset: 6-month price chart with cycle low zone and cycle high zone shaded, current cycle position % marked, history of bot's entries/exits overlaid, volume profile, recent news for the asset. The core instrument the operator uses to evaluate AI judgment on cycle calls. |
+| 7.6 | Decisions & Triggers | M, ~2d | Watch list, wake-up history, wake-up stats, app decision stream, state change log |
+| 7.7 | Performance | M, ~2d | **BTC benchmark overlay is the dominant feature**, "Beating BTC over 30d/60d/all-time" headline metric with pass/fail badge, equity curve, drawdown, P&L breakdown by asset, alt cycle win rate, bear regime exit retrospective performance, fee drag |
+| 7.8 | System | M, ~2d | Boot history, error log, API budget detail, cache hit rates, last successful action, phase progress, regime-call accuracy retrospective |
+| 7.9 | Controls | S, ~1d | Pause/resume, close all, force brief, force reconcile, paper/live toggle (gated, typed-phrase confirmation), convert to BTC core hold (double-confirmation), params view + edit |
 
 **Validation per view:** renders with real data; empty states present and informative; real-time updates work where applicable.
 
@@ -320,14 +353,20 @@ End-to-end scenarios. Deploy to DO. Smoke tests in production.
 
 **Deliverables:**
 - E2E test scenarios:
-  - Morning brief → no action
-  - Morning brief → entry → stop hit
-  - Morning brief → entry → take profit
-  - Morning brief → entry → thesis invalidation exit
-  - Regime downgrade → forced exit
-  - Force-reconcile picks up missing stop
-  - Wake-up trigger fires → Sonnet escalates → Opus enters trade
+  - Morning brief → no action (most common case in cycle trading)
+  - Bull regime call → DCA into BTC core over multiple days
+  - Chop regime call → reduce BTC core via DCA-out
+  - **Bear regime call → exit ALL positions to USDC** (the most important alpha source — must work flawlessly)
+  - Re-entry from bear → DCA back into BTC over 5-10 days
+  - Alt at cycle low + momentum + volume confirmed → laddered entry over 24h
+  - Alt cycle high zone reached → laddered sell (1/3 + 1/3 + 1/3)
+  - Alt cycle invalidation (break of range floor on volume) → immediate market exit
+  - Bear regime triggers while alt position open → alt force-exited regardless of cycle position
+  - 14-day re-entry cooldown enforced after cycle invalidation
+  - Force-reconcile picks up missing trailing stop on alt position
+  - Wake-up trigger fires (>5% in 4h) → Sonnet escalates → Opus decides
   - Budget cap exceeded → Sonnet checks suppressed, daily Opus still runs
+  - **60-day BTC underperformance gate triggers correctly** (the kill switch)
 - **Cross-mode safety E2E scenarios** (per `STRATEGY.md §13`):
   - Paper-mode session runs full AI flow → mock HTTP layer asserts zero Coinbase order calls
   - Mode toggle attempted with open paper positions → rejected with operator-visible reason
@@ -345,18 +384,25 @@ End-to-end scenarios. Deploy to DO. Smoke tests in production.
 
 ---
 
-## Phase 10 — Phase 1 paper trading (30 days)
+## Phase 10 — Phase 1 paper trading (60 days)
 
-The 30-day paper window from `STRATEGY.md §6.3`.
+The 60-day paper window from `STRATEGY.md §6.3`. Longer than the swing-strategy version because regime detection is the alpha source and 30 days isn't enough to validate it across changing conditions.
 
 - All decisions made, all trades simulated against real prices
 - Real API costs accrue (this is real money the operator subsidizes)
 - Operator monitors via dashboard daily
 - Phase 1 advance criteria tracked on Performance + System pages
-- Operator reads ≥ 5 morning briefs and judges them coherent
+- Operator reads ≥ 10 morning briefs and judges them coherent
 
-At end of 30 days:
-- All Phase 1 criteria pass → advance to Phase 2 (half-size live)
+Advance criteria (per `STRATEGY.md §6.3`):
+- Hypothetical performance > BTC hold by ≥ 3% over 60 days
+- Regime detection accuracy ≥ 60% in retrospective evaluation
+- Bear regime exits worked correctly in at least one detected/simulated downturn (waived if no downturn occurred, with explicit note)
+- ≥ 2 closed alt cycle trades with documented entry/exit reasoning the operator finds coherent
+- Zero hard guardrail violations, zero "the bot wanted to do something insane" incidents
+
+At end of 60 days:
+- All criteria pass → advance to Phase 2 (half-size live, 60 days)
 - Any criterion fails → extend paper for another 30 days OR shut down per `STRATEGY.md §6.3`
 
 **No advancing without all criteria passing.** Don't goalpost-move.
@@ -386,16 +432,20 @@ Phases 6, 7, 8 are off the critical path if started in parallel after Phase 1 �
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| **Paper-mode bug places real order** | Low (with isolation) | **Catastrophic** | Phase 4 executor split (file-level isolation); 8 non-negotiable tests in `STRATEGY.md §13.8`; cross-mode E2E scenarios in Phase 9; CI lint rules from Phase 1 |
+| **Regime detector calls bear too late** | Medium | **Catastrophic** | The single largest risk in v3 — the entire alpha source depends on getting bear exits right. Phase 3 prompt iteration must include retrospective regime accuracy testing on 2022-2023 bear data. Phase 1 paper window (60 days) chosen specifically to surface this. Operator monitors regime-call lag continuously. |
+| **Regime detector calls bear too early (whipsaw)** | Medium | High | Bot sells in chop, misses next leg up. Mitigation: regime change requires sustained evidence (one-level-per-day rule), 14-day re-entry cooldown for alts, regime history visible in dashboard for operator review. |
+| **Paper-mode bug places real order** | Low (with isolation) | Catastrophic | Phase 4 executor split (file-level isolation); 8 non-negotiable tests in `STRATEGY.md §13.8`; cross-mode E2E scenarios in Phase 9; CI lint rules from Phase 1 |
 | **Cross-mode P&L pollution** | Low (with isolation) | High | Mode-split state keys (Phase 1); query helper enforcement (Phase 1 lint rule); P&L isolation test (Phase 4F) |
 | Opus prompt produces incoherent regime calls | Medium | High | Phase 3 includes prompt iteration; Phase 1 paper period surfaces issues before live |
-| Stop reconciliation has bug → unprotected position | Low | Catastrophic | Test scenarios in Phase 4; integration test in Phase 9; reconciliation logs reviewed at every boot |
-| Budget gate has bug → cap exceeded | Low | Medium | Test suite in Phase 2; alert when MTD trajectory hot |
+| Alt cycle bag-holding (cycle invalidation triggers too late) | Medium | Medium | 12% initial soft stop limits damage; cycle invalidation rule is precise (range-floor break + volume); operator visibility on Cycle Position view |
+| Stop reconciliation has bug → unprotected alt position | Low | Catastrophic | Test scenarios in Phase 4; integration test in Phase 9; reconciliation logs reviewed at every boot |
+| Budget gate has bug → cap exceeded | Low | Medium | Test suite in Phase 2; alert when MTD trajectory hot. Lower per-day cost in v3 (~$0.50-0.75) gives more margin than v2. |
 | Frontend slips and delays paper trading start | Medium | Medium | Start frontend in parallel; minimum viable views first per page, polish in Phase 8 |
 | Real-time updates don't work reliably | Medium | Low | Fall back to 5s polling if SSE issues |
-| Coinbase paper sim diverges from live behavior | High | Medium | Phase 1→2 transition is the verification; expect surprises in first 30d half-size; paper executor uses real prices, not a mock feed |
+| Coinbase paper sim diverges from live behavior | High | Medium | Phase 1→2 transition is the verification; expect surprises in first 60d half-size; paper executor uses real prices, not a mock feed |
 | Existing repo has hidden dependencies we lose by wiping | Medium | Medium | Branch first, wipe second; reference `archive/v1` as needed |
 | AI prompt drift across model versions | Low (we pinned 4.7/4.6) | Medium | Pin model versions in code constants; strategy_version increments on model migration |
+| All watchlist alts trend down to zero (no cycles in market regime) | Low | Medium | BTC core carries portfolio; alt sleeve underperforms but doesn't blow up; 60-day BTC underperformance gate would catch sustained failure |
 
 ---
 
@@ -410,12 +460,16 @@ Phases 6, 7, 8 are off the critical path if started in parallel after Phase 1 �
 | 4: Trading execution + paper isolation | L | ~10 days | yes |
 | 5: Triggers + scheduling + risk | M | ~5 days | yes |
 | 6: Frontend foundation | M | ~5 days | parallel after P1 |
-| 7: Frontend views | L | ~12 days | parallel; must land before P9 |
+| 7: Frontend views | L | ~13 days | parallel; must land before P9 (added Cycle Position view) |
 | 8: Real-time + polish | S | ~3 days | throughout P7 |
 | 9: Integration + deploy | M | ~4 days | yes |
-| 10: Paper trading | — | 30 days observation | — |
+| 10: Paper trading | — | **60 days observation** | — |
+| Phase 2 (live half-size) | — | **60 days** | — |
+| Phase 3 (live full-size) | — | ongoing | — |
 
-**Critical path total: ~6–8 weeks** to start of paper trading (Phase 4 grew from 7 to 10 days for paper-mode safety architecture).
+**Critical path total: ~6–8 weeks** to start of paper trading.
+
+**Total time to first full-size live trade: ~17 weeks** (build + 60d paper + 60d half-size). Longer than v2's ~12-14 weeks because of the longer paper window — regime detection needs the time to be validated honestly.
 **Plus 30 days Phase 1 paper window.**
 **Plus 30 days Phase 2 half-size window.**
 **First full-size live trade: ~12–14 weeks from start.**

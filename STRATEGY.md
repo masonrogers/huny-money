@@ -1,33 +1,35 @@
-# Huny Money — Trading Strategy v2.0
+# Huny Money — Trading Strategy v3.0 (Regime-Aware BTC Core + Alt Cycle Overlay)
 
-**Status:** Specification for clean rebuild. Replaces all prior strategy documents.
-**Goal:** Make money on a $500 USDC account at Coinbase, trading BTC/ETH/SOL only, within a $50/month Anthropic API budget.
-**Audience:** The operator (David) and the implementation agents who will build this.
+**Status:** Active spec. Replaces v2 (swing-trading) which is preserved on the `archive/v1` branch as historical reference.
+**Goal:** Make money on a $500 USDC account at Coinbase, with the explicit aim of **beating BTC buy-and-hold over rolling 60-day windows**.
+**Audience:** Operator (David) and the implementation agents.
 
-This document is the single source of truth. There is no companion document. There is no v1.
+This document is the single source of truth. There is no companion document.
+
+The core insight: in a swing-trading bot the AI's job is to pick trades; in v3 the AI's job is to **call the regime correctly** (everything else flows from that) and **identify alt cycle entries when conditions are favorable**. The largest source of alpha vs. BTC is not riding bear markets down, not picking better swings.
 
 ---
 
 ## 1. Goal
 
-**Make money on a $500 account, net of trading fees, while beating BTC buy-and-hold over rolling 60-day windows.**
+**Beat BTC buy-and-hold over rolling 60-day windows on a $500 USDC account, net of trading fees.**
 
-That is the entire goal. Everything in this spec serves it. If a section can't be traced back to that sentence, it should be cut.
+That is the entire goal. Everything in this spec serves it. The benchmark is BTC because BTC is the highest-probability passive crypto strategy; if the bot can't beat the benchmark, it has no reason to exist.
 
-The operator subsidizes the $50/month API cost; it is a budget constraint, not a P&L line item. If the account makes money, the operator adds capital. If the account loses money or persistently underperforms BTC hold, the bot converts to BTC core hold and stops actively trading.
+The operator subsidizes the $50/month API cost. If the bot beats BTC, capital is added. If it persistently fails to beat BTC, it converts to BTC core hold and stops active trading.
 
 ---
 
 ## 2. Core Principles (in priority order)
 
-1. **Don't blow up.** Survive first, profit second. The $300 hard floor is sacred.
-2. **Default to cash.** Most days, the right action is no action. The bot's job is to wait for setups, not to manufacture them.
-3. **Beat BTC hold or stop trading.** The benchmark is buy-and-hold. If the bot can't beat doing nothing, the bot is destroying value. 60-day rolling underperformance → convert to BTC core hold.
-4. **Trade catalysts, not feelings.** Every trade requires a specific, named, externally verifiable reason.
-5. **Stops are sacred and exchange-side.** Every position has a stop-limit on Coinbase the moment it opens. The bot can adjust them; it cannot remove them.
-6. **One model per decision.** Opus decides trades. Sonnet watches and routes. They never overlap on the same decision.
-7. **Spend AI on decisions, not chatter.** $50/month is plenty if you only call the model when something might actually change.
-8. **Total operator visibility, beautifully presented.** The operator sees every AI decision, every app action, every state change without ambiguity or log diving. The dashboard is a first-class deliverable — frontend quality matches backend quality in effort and polish. The operator should never have to ask "what is the bot doing right now?" or "why did it do that?"
+1. **Don't blow up.** Survive first. The $300 hard floor is sacred.
+2. **BTC is the default.** When in doubt, you should be in BTC. The bot requires positive evidence to be anywhere else, not the other way around.
+3. **Beat BTC or fold into BTC.** The bot's existence is justified only by outperformance. 60-day rolling underperformance → convert to BTC core hold permanently.
+4. **Bear market exits are the primary alpha source.** The single biggest opportunity to beat BTC is not riding bears down. Get this right; everything else is secondary.
+5. **Alt cycle trades are satellites, not core.** They add upside; they don't carry the portfolio. A failed alt cycle should hurt but never blow up the bot.
+6. **One model per decision.** Opus decides. Sonnet watches and routes. Same as v2.
+7. **Total operator visibility, beautifully presented.** Same as v2.
+8. **Paper mode is real money.** Same as v2 (full isolation per §13).
 
 ---
 
@@ -35,128 +37,173 @@ The operator subsidizes the $50/month API cost; it is a budget constraint, not a
 
 ### 3.1 Asset universe
 
-**BTC, ETH, SOL only.** No alts. No memecoins. No tertiary list. No human-approval flow. No exceptions.
+**Core (always available):** BTC, ETH
 
-Reasoning: $500 is too small to spread across many assets. Liquidity matters at this size. Opus can find substantive data on these three. Adding more is not edge, it's noise.
+**Cycle alt watchlist:** 4-6 mid-cap alts curated by the operator at startup. Selection criteria:
+
+- $200M+ market cap (liquidity)
+- Listed on Coinbase Advanced Trade
+- Has demonstrated cyclical price behavior over at least 2 prior cycles
+- Has real fundamentals (active users, real protocol revenue, established team)
+- Not a memecoin
+
+**Initial recommended watchlist** (operator confirms or adjusts at deploy):
+- **AERO** (Aerodrome — Base DEX, the operator's proven cycle asset)
+- **LINK** (Chainlink — old reliable, range behavior)
+- **AAVE** (DeFi blue chip)
+- **UNI** (DEX leader)
+- **SOL** (large cap with cycle character)
+- One additional operator-pick (INJ, JUP, ENA, LDO, PENDLE, or similar)
+
+**The watchlist is hardcoded in code, modifiable only via deploy + version bump.** No tertiary asset universe. No human-approval-required additions during operation. No AI-driven asset additions.
 
 ### 3.2 Three regimes
 
-Daily, Opus classifies the market into one of three regimes. The regime sets a hard exposure ceiling.
+Daily, Opus classifies BTC into one of three regimes, with full evidence:
 
-| Regime | Description | Max deployed |
-|---|---|---|
-| **Bull** | BTC making higher highs, above 50d MA, supportive macro | 70% |
-| **Chop** | Sideways, no clear trend, mixed signals | 30% |
-| **Bear** | BTC below 50d MA, capitulation signs, hostile macro | 0% (cash only) |
+| Regime | Description | BTC alloc | Max alt alloc | Cash alloc |
+|---|---|---|---|---|
+| **Bull** | BTC making higher highs, above 50d MA, supportive macro | 70% | 0-30% | 0-30% |
+| **Chop** | Sideways, no clear trend, mixed signals | 50% | 0-30% | 20-50% |
+| **Bear** | BTC below 50d MA, distribution signs, hostile macro | **0%** | **0%** | **100%** |
 
-Why three not five: simpler classification is more reliable. "Almost bull" and "almost bear" are just bull/bear with lower conviction; they don't deserve their own regime.
+**Bear regime is sacred.** When the AI calls bear, the bot exits everything to USDC. No alt "diversification" in bear. No "but this one trade is special" carveouts. Bear means cash. Period.
 
-Regime can change by one level per day (bull → chop, chop → bear) unless a circuit breaker fires. A regime change requires written evidence in Opus's morning output.
+Regime can change by one level per day (bull → chop, chop → bear, bull → bull, etc.) unless a circuit breaker fires. A regime change requires written evidence in the morning brief, and the dashboard surfaces both the call and the evidence.
 
-### 3.3 Two layers of position
+### 3.3 BTC core management
 
-**Core layer (Bull regime only).** A 25% BTC core position, built via 3 DCA entries spread over 5 days. Held while regime stays Bull. Exited gradually over 3 days when regime drops to Chop or Bear. Provides baseline crypto beta when the trend is favorable.
+**Bull regime:** Default 70% BTC. Built via 3-5 DCA entries spread over 5-10 days when first entering bull from chop or bear. Held as a single core position. No active management within bull (the position just sits unless regime changes).
 
-**Swing layer.** 0–2 active swing trades on top of core. 2–7 day holds. Catalyst-driven. Stop and target set at entry, on the exchange.
+**Chop regime:** Default 50% BTC. Same DCA pattern when transitioning down from bull. No active management within chop.
 
-Total exposure (core + swing combined) cannot exceed the regime ceiling.
+**Bear regime:** Exit BTC entirely over 2-3 days (laddered sells). Hold 100% USDC. Wait.
 
-### 3.4 Entry criteria (swing — all required)
+**Re-entry from bear:** When regime upgrades from bear to chop or bull, DCA back in over 5-10 days. Don't go from 100% USDC to 100% BTC in one transaction — gives buffer if the regime call is wrong.
 
-1. **Named catalyst.** Specific and verifiable. Examples: "BTC ETF inflows hit 7-day high of $X," "ETH broke $4,200 resistance on 2.1× avg volume," "Fed pivot signaled at FOMC." Not "looks bullish."
-2. **Confirmation.** The catalyst is already showing in price action. The bot does not front-run.
-3. **Risk:reward ≥ 2:1.** Distance to target ≥ 2× distance to stop.
-4. **Conviction ≥ 70.** Below that, watch and wait.
-5. **Regime alignment.** Long entries in Bull or Chop only. Never in Bear.
-6. **No major counter-catalyst within hold window.** Don't enter the morning before CPI.
-7. **Minimum holding period plan: 24 hours.** If the thesis requires a sub-day hold, the thesis is wrong for this system.
+### 3.4 Alt cycle entries
 
-### 3.5 Position sizing
+The bot considers an alt for entry when ALL of the following are true:
 
-| Conviction | Allocation |
+1. **Cycle position:** Asset is in the bottom 30% of its 6-month range (the "cycle low zone")
+2. **Momentum reversal:** Asset has reclaimed its 20-day MA OR RSI(14) has crossed back above 30 from below
+3. **Volume confirmation:** 5-day average volume > 20-day average volume by ≥ 20% (real interest, not random tick)
+4. **No invalidation:** No breakdown of the 6-month range floor; no recent fundamental negative (token unlock cliff, exploit, regulatory action, founder departure)
+5. **Conviction ≥ 70**
+6. **Regime is bull or chop:** **Never enter alts in bear regime, regardless of any condition above**
+7. **Position sizing fits:** Adding this alt doesn't push total alt exposure past 30%
+
+When the bot identifies an alt at cycle low with these criteria, it enters via 2 entries spread over 24 hours (ladder in to avoid bottom-tick attempts).
+
+### 3.5 Alt cycle exits
+
+The bot exits an alt position when ANY of:
+
+1. **Cycle high zone reached:** Asset is in top 25% of its 6-month range. **Sell laddered:** 1/3 immediately, 1/3 over next 5-10 days, 1/3 trailed with a moving stop.
+2. **Cycle invalidation:** Asset breaks below the 6-month range floor on volume → exit immediately, market order if needed. The cycle is broken; this is "the AERO playbook" failing for that asset and we accept the loss quickly.
+3. **Better opportunity:** Another watchlist alt is at a stronger cycle low and we don't have allocation room → rotate (sell weakest position, buy stronger setup)
+4. **Regime shift to bear:** Exit ALL alts immediately. No exceptions.
+5. **Time decay:** Position has been held for 12 weeks without reaching the upper 50% of range → reassess. If thesis still holds, may extend to 6 months max. After 6 months, force exit regardless of P&L.
+6. **Conviction drops below 50** on any morning brief → exit
+
+### 3.6 Position sizing
+
+| Type | Allocation |
 |---|---|
-| 70–79 | 20% of capital |
-| 80–89 | 30% of capital |
-| 90–100 | 40% of capital |
+| BTC core (bull) | 70% of capital |
+| BTC core (chop) | 50% of capital |
+| BTC core (bear) | 0% of capital |
+| Single alt cycle position | 10-15% of capital |
+| Max total alt exposure | 30% of capital |
+| Min cash (bull) | 0% (room for full BTC + alts) |
+| Min cash (chop) | 20% (more dry powder while BTC isn't running) |
+| Min cash (bear) | 100% |
 
-Hard maximum single position: **50%**. Hard minimum cash: **30%**. Hard maximum positions: **2 swing + 1 core = 3 total**. Hard minimum position size: **$50** (below this, fees eat the trade).
+Hard maximum any single position: 70% (BTC core in bull). Alts capped at 15% individually. Min position size: $50 (below this, fees eat the trade).
 
-If a planned swing would push total exposure above the regime ceiling, reduce size or skip.
+**At $500 capital, the bot effectively holds 1-2 active alt positions at once.** This is fine — concentration in best setups is preferred over diluted exposure across mediocre ones.
 
-### 3.6 Exit triggers (any one)
+### 3.7 Trailing stops on alt positions
 
-1. **Stop loss hit.** Default 5% below entry, adjustable 4–8% by Opus at entry. Stop is exchange-side from the moment of entry.
-2. **Take profit hit.** Take 50% off at the 2:1 R target. Trail the remaining 50% with the trailing stop logic in §3.7.
-3. **Thesis invalidated.** The catalyst no longer applies. Exit on next evaluation, market order if needed.
-4. **Time decay.** Position is flat (within ±2% of entry) at 5 days → exit. Hard maximum hold: 10 days.
-5. **Conviction drops below 50.** General loss of confidence on next evaluation. Exit.
-6. **Regime downgrade.** Regime drops below current exposure. Reduce lowest-conviction position first.
+Alt positions don't get tight stops at entry — cycle volatility would whipsaw them out. Instead:
 
-### 3.7 Trailing stop logic
+- **Initial soft stop:** 12% below entry. Wider than swing stops because cycles include volatility.
+- **Once position is up 25%:** trail stop to breakeven
+- **Up 50%:** trail stop to +20%
+- **Up 75%:** trail stop to +40%
+- **Up 100%:** trail stop to +65%
 
-When a position is profitable, the stop ratchets up:
-- At +4%: stop to breakeven
-- At +8%: stop to +4%
-- At +12%: stop to +8%
-- Continue at 4% intervals
+These are exchange-side stop-limit orders. Same reconciliation rules as v2 — every position must have an active stop on Coinbase; boot reconciliation places one immediately if missing.
 
-When the stop is moved, the app cancels the old stop-limit on Coinbase and places a new one. If the app dies between cancel and replace, boot reconciliation (§6.1) detects the gap and places a stop immediately. **An unprotected position is the most dangerous state the system can be in.**
+**BTC core does NOT get a trailing stop.** BTC core is exited by regime change, not by stop. A 12% drawdown on BTC during a chop regime is normal and not a reason to exit.
 
-### 3.8 Catalyst categories (guidance, not a checklist)
+### 3.8 Cycle range computation
 
-This is what the bot looks for. Listed so Opus's prompt can include them as priors.
+The "6-month range" for each watchlist asset is computed daily by the app:
 
-- **Macro:** Fed decisions, CPI prints, FOMC minutes, jobs data, dollar/yields shifts
-- **Crypto-specific:** BTC ETF inflow/outflow extremes, GBTC unlock dynamics, large exchange flows
-- **Regulatory:** SEC actions, ETF approvals/denials, major regulatory clarity events
-- **Technical:** confirmed breakout or breakdown of a defined multi-week range, on volume
-- **On-chain:** large exchange outflows, miner accumulation/distribution, dormant supply movement
-- **Network:** protocol upgrades, mainnet launches, hard fork activations
-- **Sentiment:** extreme fear/greed reversals from extreme readings (Fear & Greed Index)
-- **Funding:** perpetual futures funding rate extremes (positioning signal even though this system trades spot)
+- Take 180 days of daily closes
+- `cycle_low_zone_top = min + 0.3 × (max - min)` (top of bottom 30%)
+- `cycle_high_zone_bottom = min + 0.75 × (max - min)` (bottom of top 25%)
+- These boundaries are stored in the `state` table per asset, refreshed nightly at 00:00 UTC
 
-A trade can have one strong catalyst or several mild correlated catalysts. The catalyst must be writeable as a sentence and verifiable.
+The AI sees these zones in the morning brief data package and uses them as inputs, not as gospel. The AI may decide a "cycle low zone" entry is unwise (e.g., during macro deterioration), and the AI may decide to extend a position past the cycle high zone if a structural narrative is strengthening. But the zones are the default frame.
+
+### 3.9 What the bot does NOT do
+
+- Day trading or hour-to-hour swing trading
+- Catalyst-driven swing entries on top of cycle entries (cycle position IS the entry signal)
+- Stop-loss-driven exits as a primary tactic for alts (cycle invalidation is the alt exit; trailing stops protect profits only)
+- Hold through a confirmed bear regime
+- Add new assets to the watchlist without a deploy (no AI-driven additions, no operator-runtime additions)
+- Allocate more than 30% to alts in any regime
+- Enter alts in bear regime under any circumstance, ever
+- Use leverage of any kind
 
 ---
 
 ## 4. Risk Management
 
-### 4.1 Hard limits (immutable, in code, not modifiable by AI)
+### 4.1 Hard limits (immutable, in code)
 
-- Max single position: 50% of capital
-- Max total deployed: 70% of capital
-- Min cash reserve: 30% of capital
-- Max positions open: 2 swing + 1 core
+- Max single position (BTC): 70% of capital
+- Max single alt position: 15% of capital
+- Max total alt exposure: 30% of capital
+- Min cash by regime: 0% (bull) / 20% (chop) / 100% (bear)
 - Min position size: $50
-- Min risk:reward to enter: 2:1
-- Min conviction to enter: 70
-- Required at entry: catalyst, exchange-side stop, exchange-side take-profit
+- Required at every alt entry: cycle position confirmation, momentum confirmation, volume confirmation, no invalidation, exchange-side stop
 - Daily realized loss cap: 4% of capital in rolling 24h
-- $300 account floor: hard halt + alert, requires manual restart
+- $300 account floor: hard halt + alert
 
-To change any of these, the operator edits code and reviews the change. Opus and Sonnet have no authority over these constants.
+These cannot be modified by AI. Code changes require operator review.
 
 ### 4.2 Circuit breakers
 
-- **Soft (20% drawdown from peak):** halve all subsequent position sizes until account recovers to within 10% of peak.
-- **Hard ($300 account value):** halt all trading immediately, alert the operator, refuse to resume without manual intervention.
-
-Peak value is stored in `state.peak_value_usd` and updated whenever total portfolio value (cash + positions marked-to-market) exceeds the stored peak.
+- **Soft (20% drawdown from peak):** halve all alt position sizes; BTC core is unchanged. Soft breaker resets when account is within 10% of peak.
+- **Hard ($300 account value):** halt everything immediately, alert, refuse to resume without manual intervention.
 
 ### 4.3 Behavioral controls
 
-- **2 consecutive losses:** 24-hour cooldown before next entry. Computed from the `positions` table on demand. `state.cooldown_until` stores the deadline.
-- **Daily realized loss > 4%:** entry block until next calendar day (UTC). Computed from `positions` on demand, no in-memory counter.
-- **3 consecutive wins:** Opus's morning brief prompt includes a specific overconfidence check.
+- **2 consecutive losing alt cycle trades:** 14-day cooldown before next alt entry. (BTC core is unaffected.) Computed from `positions` on demand.
+- **Daily realized loss > 4%:** entry block until next calendar day (UTC).
+- **3 consecutive winning alt cycles:** Opus's morning brief includes an explicit overconfidence check.
 
-### 4.4 BTC benchmark gate
+### 4.4 The BTC benchmark gate (the most important rule in this document)
 
-The bot tracks cumulative return vs. BTC buy-and-hold from `state.btc_price_at_start`.
+The bot's existence is justified only by beating BTC. The check is:
 
-- **30-day rolling underperformance > 5%:** Opus's next morning brief MUST include a written assessment of why.
-- **60-day rolling underperformance > 0%:** the bot pauses active trading. Operator decides between (a) restart with adjusted strategy or (b) convert to BTC core hold permanently per §6.4.
+- **30-day rolling underperformance > 3%:** morning brief MUST include a written assessment of why
+- **30-day rolling underperformance > 5%:** AI is prompted to consider whether the strategy is structurally failing for current conditions
+- **60-day rolling underperformance > 0%:** bot **pauses active trading** and presents the operator with two options:
+  1. Restart with documented adjustments
+  2. **Convert to BTC core hold permanently and stop active trading**
 
-This is the honesty check. If you can't beat sitting in BTC, sit in BTC.
+This is the kill switch for the entire strategy. It must fire reliably. The benchmark uses `state.btc_price_at_start_paper` or `_live` as the anchor, computed from current Coinbase price; the bot cannot manipulate either.
+
+If the operator chooses option 2, the bot:
+- Closes all alt positions
+- Buys BTC with all available USDC
+- Halts all active decisions
+- Continues to track P&L vs. BTC (which is now zero by construction) and dashboard-only
 
 ---
 
@@ -164,182 +211,138 @@ This is the honesty check. If you can't beat sitting in BTC, sit in BTC.
 
 ### 5.1 Two roles
 
-- **Decider — Claude Opus 4.7** (`claude-opus-4-7`): regime calls, entry decisions, exit decisions, stop adjustments, monthly review. The only model that can cause an order to be placed, modified, or cancelled.
-- **Watcher — Claude Sonnet 4.6** (`claude-sonnet-4-6`): cheap monitoring. Reads current state vs. morning plan, decides whether to wake Opus. Cannot place, modify, or cancel orders.
+Same architecture as v2:
+- **Decider — Claude Opus 4.7** (`claude-opus-4-7`): regime calls, BTC entry/exit decisions, alt cycle entry/exit decisions, trailing stop adjustments, monthly review. Only model authorized to cause an order action.
+- **Watcher — Claude Sonnet 4.6** (`claude-sonnet-4-6`): cheap monitoring. Cannot place, modify, or cancel orders.
 
-A test must verify that no Sonnet response can result in an order action without an intervening Opus call. If Sonnet returns anything that looks like an order instruction, the response is rejected as malformed.
+A test must verify no Sonnet response can result in an order action without an intervening Opus call.
 
 ### 5.2 Schedule
 
+Significantly less frequent than v2 — cycle trading horizon is weeks:
+
 | Time (UTC) | Model | Purpose |
 |---|---|---|
-| 14:00 | Opus 4.7, max thinking | Daily morning brief: regime, plan, watch list, position management |
-| 18:00, 22:00, 02:00, 06:00, 10:00 | Sonnet 4.6 | Routine watch checkpoints (5 per day) |
+| 14:00 | Opus 4.7, max thinking | Daily morning brief: regime call, alt watchlist scan, position management, BTC benchmark assessment |
+| 06:00, 22:00 | Sonnet 4.6 | Watch checkpoints (only 2 per day) |
 | Event-driven | Sonnet 4.6 | Wake-up on price move, stop fill, or news keyword |
 | On Sonnet escalation | Opus 4.7, medium thinking | Action decision |
 | Monthly (operator-triggered) | Opus 4.7, max thinking | Strategy review |
 
-The 14:00 UTC slot is intentional: US market overlap, after Asia close, before US open peaks. Catches both yesterday's outcome and today's setup.
-
-### 5.3 Daily morning brief (Opus, ~$0.20/call)
+### 5.3 Daily morning brief (Opus, ~$0.20-$0.30/call)
 
 **Input package:**
 - System prompt (cached, ~3K tokens)
-- Portfolio state: cash, positions, P&L vs. start, P&L vs. BTC, drawdown from peak, current regime, days in current regime
-- Compressed price candles (CSV-style strings, not arrays of objects): daily 90d, 4h 14d, 1h 48h for BTC/ETH/SOL
-- Indicators (computed app-side): RSI(14) daily/4h, MACD daily, BBands(20,2) daily, 50d/200d MA, BTC.D, 20d avg volume, ATR(14)
-- Recent news (web search inside the call, scoped to crypto/macro, last 24h)
+- Portfolio state with mode-correct values (cash, BTC core, alt positions, P&L vs. start, P&L vs. BTC, drawdown from peak, current regime, days in regime, regime history)
+- BTC: daily 365d compressed, 4h 30d compressed, 1h 7d compressed; indicators (RSI, MACD, BBands, 50d/200d MA, ATR)
+- ETH: daily 365d, 4h 30d compressed; indicators
+- BTC dominance (BTC.D) trend with 30d/90d moving averages
+- For each watchlist alt: daily 365d compressed, **current cycle position (% of 6-month range)**, 30d volume vs 90d avg, recent news scan
+- Recent news (web search inside the call: macro, crypto, sector narratives)
 - Yesterday's brief + actions taken + observed outcomes
-- Closed trades: last 20
+- Closed trades: last 20 with reasoning
 - Active params from `params` table
-- Behavioral state: cooldown active?, drawdown level, consecutive wins/losses
+- **BTC benchmark assessment** (cumulative outperformance, 30d, 60d) — prominent
 
 **Output (JSON, schema-validated):**
 ```json
 {
   "regime": "bull|chop|bear",
-  "regime_evidence": "BTC reclaimed 50d MA on 1.8x avg volume, ETF flows +$430M for 4 consecutive days, DXY weakening",
+  "regime_evidence": "BTC reclaimed 200d MA on 2.1x avg volume, ETF flows +$430M for 5 consecutive days, DXY weakening, no major macro events scheduled",
   "regime_changed_from": "chop",
-  "max_exposure_pct": 70,
-  "btc_benchmark_assessment": "System +2.4% vs BTC +0.8% over last 30d. No corrective action needed.",
-  "current_positions": [
+  "btc_core_decision": {
+    "current_alloc_pct": 50,
+    "target_alloc_pct": 70,
+    "action": "dca_in|hold|dca_out|exit",
+    "tranches_planned": 3,
+    "reasoning": "..."
+  },
+  "alt_positions": [
     {
-      "asset": "BTC",
-      "action": "hold|adjust_stop|take_partial|exit",
-      "new_stop": null,
-      "new_target": null,
+      "asset": "AERO",
+      "current_cycle_position_pct": 18,
+      "action": "hold|trail_stop|partial_sell|exit",
       "reasoning": "..."
     }
   ],
-  "new_trades": [
+  "alt_entry_candidates": [
     {
-      "asset": "ETH",
-      "conviction": 75,
-      "catalyst": "specific named catalyst",
-      "confirmation": "what confirmed direction",
-      "entry_price_target": 4200,
-      "stop_loss": 3990,
-      "take_profit_target": 4620,
-      "size_pct": 20,
-      "expected_hold_days": 4,
-      "reasoning": "full paragraph"
+      "asset": "LINK",
+      "cycle_position_pct": 22,
+      "momentum_signal": "RSI 32, reclaimed 20d MA",
+      "volume_signal": "1.4x 20d avg",
+      "conviction": 73,
+      "size_pct": 12,
+      "stop_pct": 12,
+      "reasoning": "..."
     }
   ],
   "watch_list": [
     {
-      "id": "btc-breakout",
-      "asset": "BTC",
-      "condition": "price > 70000 with 1h volume > 1.5x 20d hourly avg",
-      "rationale": "Breakout above resistance on volume would confirm bull thesis from this morning",
-      "urgency": "immediate|next_check"
+      "id": "aero-cycle-high",
+      "asset": "AERO",
+      "condition": "AERO breaks above $1.10 with volume > 1.5x avg",
+      "rationale": "Approaching cycle high zone; first take-profit tranche if confirmed"
     }
   ],
-  "no_escalation_guidance": "BTC drift in 68k-70k range with normal volume is consolidation; do not escalate. Routine alt drift ±2% on no news is normal; do not escalate.",
-  "discipline_check": "I am not entering trades on SOL today because [...]. I am not raising the BTC stop because [...]."
+  "btc_benchmark_assessment": "System +1.2% vs BTC +3.8% over last 30d. Underperformance driven by AERO position waiting for cycle high. Not corrective action yet but flagged.",
+  "discipline_check": "I am NOT entering UNI today even though it's in cycle low zone because volume is declining. I am NOT taking profits on AERO yet despite +28% because cycle high zone starts at $0.95 and we're at $0.78."
 }
 ```
 
-The `watch_list` is what Sonnet uses during the day. **Hardcoded maximum: 5 watch items.** Above that, the app keeps the first 5 and logs an error. The list is regenerated fresh every morning; it is not persistent state that learns over time.
+The `watch_list` is hardcoded max 5 items. Same as v2.
 
-### 5.4 Sonnet monitoring (~$0.012/call)
+### 5.4 Sonnet checks (~$0.012/call)
 
-**Input package:**
-- System prompt for watcher (cached, ~2K tokens)
-- Today's morning brief (regime, positions, watch_list, no_escalation_guidance) — passed fresh as a ~500-token summary, not relying on cache
-- Current prices for BTC/ETH/SOL
-- 1h volume vs. 20d hourly average
-- News scan since last check (RSS feed scan, scoped to watch_list keywords)
-- Position state: current price, distance to stop, distance to target, days held
-- Escalation budget remaining today
+Just 2 per day. Sonnet looks for:
+- Has any held alt position approached its cycle high zone? (escalate)
+- Has any held alt position broken its cycle low zone (invalidation)? (escalate)
+- Has BTC moved >5% since morning brief (regime stress test)? (escalate)
+- Has any watch list trigger from morning fired? (escalate per rubric)
+- Has any major news keyword from active rubric appeared? (escalate)
 
-**Output (JSON, schema-validated):**
-```json
-{
-  "evaluated": [
-    { "trigger_id": "btc-breakout", "fired": false, "current": "BTC at $69,300, volume 1.0x avg", "notes": "..." }
-  ],
-  "escalate": false,
-  "trigger_id": null,
-  "discretionary_escalation": false,
-  "discretionary_reason": null,
-  "summary": "All quiet. No action."
-}
-```
+If escalating: standard Sonnet → Opus dispatch via budget gate.
 
-If `escalate: true`, the app immediately calls Opus with the slim escalation package (current state + what fired + Sonnet's reasoning). Opus's response is the source of truth. Sonnet's analysis is context, not decision.
+### 5.5 Wake-up triggers (3 types, hardcoded)
 
-### 5.5 Escalation budget (hardcoded caps)
+Same architecture as v2 but tuned wider for cycle horizon:
 
-- Max scheduled Sonnet calls/day: **5**
-- Max event-driven Sonnet wake-ups/day: **6**
-- Max event-driven Sonnet wake-ups/month: **120**
-- Max Opus calls/day: **5** (1 morning + up to 4 escalations/emergencies)
-- Max Opus calls/month: **120**
+1. **Position move:** Any held position moves >5% in either direction within a 4-hour window (wider than v2's 3% in 1h since cycle alts are intentionally volatile and we don't want noise wakes). Debounce: 60 minutes per asset.
+2. **Stop fill:** A stop-limit fired on Coinbase. Wake immediately, no debounce.
+3. **News keyword hit:** RSS scan finds a watch_list keyword. Debounce: 30 minutes per keyword.
+
+Wake-up dispatch flow same as v2.
+
+### 5.6 Escalation budget (hardcoded caps)
+
+Lower than v2 due to cadence:
+
+- Max scheduled Sonnet calls/day: **2** (06:00 + 22:00)
+- Max event-driven Sonnet wake-ups/day: **4**
+- Max event-driven Sonnet wake-ups/month: **60**
+- Max Opus calls/day: **4** (1 morning + up to 3 escalations/emergencies)
+- Max Opus calls/month: **90**
 - Monthly API budget cap: **$50.00 USD**
 
-These are constants in code. Opus and Sonnet cannot change them. To change them: edit code, code review, deploy.
+Estimated monthly cost: **~$15-20** vs v2's ~$27. Substantial buffer for volatile months.
 
-### 5.6 Wake-up triggers (3 types, hardcoded)
+### 5.7 Budget enforcement, caching, anti-patterns
 
-The app evaluates these on its 5-minute polling loop. Each one wakes Sonnet (NEVER Opus directly).
+Same as v2 §5.7-§5.8. Cost data NEVER shown to Opus or Sonnet.
 
-1. **Position move:** Any held position moves >3% in either direction within a 1-hour window. Debounce: 30 minutes per asset.
-2. **Stop fill:** A stop-limit fired on Coinbase. Wake Sonnet immediately. No debounce. (Sonnet decides whether re-entry is warranted or the exit is final.)
-3. **News keyword hit:** RSS feed scan finds a watch_list keyword. Debounce: 15 minutes per keyword.
+### 5.8 System prompt outline
 
-That's the entire wake-up trigger list. Three. If three turns out not to be enough after 30 days of operation, add one via code change with operator approval.
+**Opus prompt must emphasize:**
+- "BTC is your default position. When in doubt, hold BTC. You require positive evidence to be elsewhere."
+- "**Bear regime means cash. There are no exceptions.** No 'this trade is special.' No 'just one alt.' Cash."
+- "The benchmark is BTC buy-and-hold. Every decision is implicitly a bet against just holding BTC. If you can't justify the bet, default to BTC."
+- "You are NOT a swing trader. You are looking for cycle-scale opportunities measured in weeks to months."
+- "Cycle low entry requires evidence the cycle is intact (not breaking down). Don't catch falling knives."
+- "Alt cycle exits should be laddered. Don't try to catch the exact top."
+- The strategy summary, position sizing, and exit criteria.
+- Output schema.
 
-**News source: RSS only.** Recommended feeds: CoinDesk, The Block, Reuters Crypto, Bloomberg Crypto. Web search is for use *inside* Opus calls, not as a polling source. (Polling web search every 5 minutes would cost ~$86/month and blow the entire budget alone.)
-
-### 5.7 Budget enforcement
-
-Every API call MUST go through `budget_gate(call_type) → ALLOW | BLOCK_DAILY | BLOCK_MONTHLY` which:
-- Reads MTD spend from `api_spend`
-- Estimates this call's cost × 1.3 buffer
-- Returns the decision
-
-**If blocked:**
-- **Daily Opus morning brief:** never blocked. Always runs. Alert operator if monthly cap would be exceeded.
-- **Sonnet scheduled check:** skip the window, log it.
-- **Sonnet wake-up:** skip, log to `wakeups` with `suppression_reason`.
-- **Opus escalation:** suppress. Log to `evaluations` as suppressed. Reviewed in next morning's brief.
-- **Hard floor or 60-day BTC underperformance triggered concurrently:** the relevant manual action (halt or convert) takes priority over budget gate.
-
-After every API call, write the actual cost to `api_spend` within 5 seconds.
-
-**Cost data is NEVER shown to Opus or Sonnet in any prompt.** Showing the model what it costs creates a structural incentive to manipulate call frequency. The model's decisions should be made on merit, not on budget pressure.
-
-If MTD spend trajectory will exceed the cap, **alert the operator**. Do not silently degrade. The operator can either (a) increase the budget for the month, (b) pause Sonnet checks manually, or (c) accept the alert and let the gate enforce. No automated backoff state machine.
-
-### 5.8 Caching strategy
-
-- System prompts (Opus and Sonnet): cache (1h TTL)
-- Indicator computation references: cache (1h TTL)
-- Today's morning brief, when used by Sonnet: **NOT cached.** Pass fresh as a ~500-token summary. Cache write cost > value for content used 5 times in 8 hours.
-- Long-horizon candles: cached during morning brief assembly only
-
-Track `cache_read_tokens` and `cache_write_tokens` in `api_spend` separately from base input/output for cost accuracy.
-
-### 5.9 System prompt outline (for both models)
-
-The system prompts are critical — they are where the strategy lives at runtime. Outline (full prompts to be written during implementation):
-
-**Opus system prompt must include:**
-- Identity: "You are the trading decision engine for a $500 USDC swing trading account on Coinbase."
-- The strategy summary from §3 (regimes, entry criteria, exit criteria, sizing)
-- Hard rules from §4.1
-- Discipline emphasis: "Most evaluations result in no action. That is the expected and correct outcome. Do not manufacture trades."
-- Calibration instruction: "Conviction is not vibe. 70 conviction means: if I were to take 100 trades like this, I expect ~70 to win. Be honest about uncertainty."
-- The output JSON schema
-- The catalyst categories from §3.8 as priors
-- The current strategy version
-
-**Sonnet system prompt must include:**
-- Identity: "You are a routing classifier. Your only job is to read today's plan and current state, and decide whether to escalate to Opus for a decision."
-- Explicit non-authority: "You cannot place, modify, or cancel orders. You cannot change theses or strategy parameters. If you suggest these things, your response will be rejected."
-- The escalation criteria: rubric trigger fired, fallback condition met, or discretionary novel situation
-- The output JSON schema
-- "When in doubt, do not escalate. False positive escalations cost real money. False negatives are caught by the next scheduled check or the next morning's brief."
+**Sonnet prompt:** same routing-only mandate as v2.
 
 ---
 
@@ -347,764 +350,233 @@ The system prompts are critical — they are where the strategy lives at runtime
 
 ### 6.1 Boot sequence
 
-This runs on every app start (cold start, restart, deploy, crash recovery). It is the most safety-critical code in the system.
-
-1. **Health check.** Postgres reachable. Coinbase API reachable, key is TRADE-only (refuse to start if withdrawal permission detected). Anthropic API reachable. If any fail, retry every 60s, alert if down >5 min.
-2. **Determine downtime.** Read `state.last_boot_at`. Log to `evaluations` (or a dedicated boot log) with downtime duration.
-3. **Reconcile orders.** For every order with `status = 'pending'` in `orders`, query Coinbase by order ID. Update fills, cancellations, expirations. For filled stops/take-profits: close the position in `positions`, compute net P&L (gross minus fees), record exit reason.
-4. **Reconcile balances.** Compare DB-expected balances vs. Coinbase actual. If discrepancy > 1% of total capital, alert operator and do NOT auto-correct (could be untracked manual trade or worse). If discrepancy is minor (rounding/fees), silently sync.
-5. **Verify position safety.** For every open position, verify an active stop-limit exists on Coinbase. **If missing, place one immediately at the position's current `stop_price`.** This is the highest priority action in the entire boot sequence.
-6. **Check missed evaluations.** If `state.next_eval_at` is in the past, run exactly one evaluation now after reconciliation completes. Do not run multiple catch-up evals.
-7. **Check 5%+ price moves during downtime.** For each tradeable asset, compare current price vs. `state.last_*_price_at_eval`. If any moved >5%, flag the upcoming evaluation as emergency in its prompt context.
-8. **Update `state.last_boot_at`. Resume normal scheduling.** Schedule the next evaluation. Resume polling loop.
+Same as v2 §6.1 with one addition:
+- After balance reconciliation, verify cycle range computations are current for all watchlist assets (not older than 24 hours). If stale, recompute before any decision-making.
 
 ### 6.2 First launch
 
-When the database is empty:
-1. Verify Coinbase API key is TRADE-only. **Refuse to start if withdrawal permission is enabled.** Non-negotiable.
-2. Read account balance from Coinbase. Store as `state.starting_capital_usd`.
-3. Initialize all `state` keys to defaults. Set `paper_mode = true`. Set `phase = "paper"`.
-4. Initialize `params` to defaults from this spec, version 1.0.
-5. Record current BTC price as `state.btc_price_at_start`.
-6. Run the first Opus morning brief immediately to establish initial regime.
-7. **Do not enter any trades for the first 48 hours.** Observation period. Opus's system prompt explicitly states this.
+Same as v2 §6.2 with additions:
+- Operator confirms watchlist via dashboard before bot is enabled
+- App computes initial 6-month cycle ranges for all watchlist assets
+- Records starting capital and BTC anchor price (`state.btc_price_at_start_paper`)
+- First Opus morning brief runs immediately to establish regime
+- **Do not enter any positions for the first 48 hours.** Observation period.
 
 ### 6.3 Phase rollout
 
-**Phase 0: Setup (1–2 days).** Code deployed, paper mode on, observation period. No trades. Dashboard verified working. Operator reviews first morning briefs.
+**Phase 0: Setup (1-2 days).** Operator confirms watchlist. Initialize cycle ranges. No trades. Dashboard verified.
 
-**Phase 1: Paper (30 calendar days).** All decisions made, all "trades" simulated against real prices. Real API costs accrue. Pre-committed criteria to advance to Phase 2 (any failure = stay in Phase 1 for another 30 days OR shut down):
+**Phase 1: Paper (60 calendar days).** Longer than v2's 30 days because regime detection is the alpha source and 30 days is not enough to validate it across changing conditions. Pre-committed advance criteria (any failure = stay in Phase 1 another 30 days OR shut down):
 
-- Hypothetical net P&L > 0 over the 30 days
-- Hypothetical performance > BTC hold by ≥ 2% over the 30 days
-- ≥ 6 closed paper trades (need a sample)
-- Operator has read ≥ 5 morning briefs and judged them coherent
-- Zero hard guardrail violations
-- Zero "the bot wanted to do something insane" incidents
-- No critical errors in `errors` table
+- **Hypothetical performance > BTC hold by ≥ 3% over 60 days** (the strict honesty test)
+- **Regime detection accuracy ≥ 60%** (in retrospective evaluation: did Opus's bull/chop/bear calls prove correct in hindsight?)
+- **Bear regime exits worked correctly** in at least one detected (or simulated) downturn during the 60 days. If no downturn occurred, this criterion is waived but the operator must explicitly note the lack of bear-regime test data.
+- **At least 2 closed alt cycle trades** with documented entry/exit reasoning the operator finds coherent
+- **Operator has read ≥ 10 morning briefs and judged them coherent**
+- **Zero hard guardrail violations**
+- **Zero "the bot wanted to do something insane" incidents**
 
-**Do not goalpost-move these criteria.** They are pre-committed before paper trading begins.
+These criteria are pre-committed. Do not goalpost-move.
 
-**Phase 2: Live, half size (30 calendar days).** Real money. Position sizes halved (20% → 10%, 30% → 15%, 40% → 20%). Hard guardrails unchanged (50% max, 30% min cash). Pre-committed criteria to advance to Phase 3:
+**Phase 2: Live, half size (60 days).** Position sizes halved (BTC core 35% in bull, alt positions 5-7.5%). Hard guardrails unchanged. Pre-committed advance criteria:
 
-- Realized net P&L > 0 (after fees, ignoring API cost)
-- Realized performance > BTC hold over 30 days
-- ≥ 4 closed real trades
+- Realized performance > BTC hold over 60 days
+- Realized P&L net of fees > 0
+- ≥ 3 closed real alt cycle trades
 - Zero hard circuit breaker triggers
 - ≤ 1 soft circuit breaker trigger
+- Bear regime test (if encountered): bot exited correctly
 
-**Phase 3: Live, full size.** Position sizes per §3.5. Quarterly operator review.
+**Phase 3: Live, full size.** Per spec sizing.
 
-**Phase 0 (Failure modes):**
-- **Hard floor hit ($300):** halt forever. Operator post-mortem before any restart.
-- **60-day BTC underperformance:** pause active trading, convert to BTC core hold per §4.4.
-- **Phase 1 criteria not met after 60 days of paper:** shut down or restart with revised strategy. Don't proceed to live with a strategy that hasn't earned it.
+**Phase 0 (Failure):**
+- Hard floor hit ($300): halt forever, operator post-mortem
+- 60-day BTC underperformance: pause, present operator with restart vs. convert decision per §4.4
+- Phase 1 criteria not met after 90 paper days: shut down or restart with revised strategy
 
-The toggle from `paper_mode = true` to `false` requires the operator to confirm via the dashboard, AND the app rejects the toggle if Phase 1 criteria are not currently met. The operator can override with explicit double-confirmation, but the rejection is the default.
+The toggle from `paper_mode = true` to `false` requires operator confirmation AND the app rejects the toggle if Phase 1 criteria are not currently met. Same gate logic as v2.
 
 ### 6.4 Kill switches
 
-- **One-button pause:** dashboard control, halts all new entries. Existing positions managed normally per their stops and theses.
-- **One-button close-all:** market-exit all positions, cancel all open orders. Confirmation required.
-- **Auto-halt:** $300 floor breached → immediate halt, alert.
-- **Auto-pause:** 60-day BTC underperformance → pause + alert + present operator with restart-or-convert decision.
-- **Convert to BTC core hold:** dashboard action. Closes all positions. Buys BTC with all available USDC. Halts active trading. Bot continues to track P&L vs. BTC (which is now zero) and email/log only.
+Same as v2:
+- One-button pause
+- One-button close-all
+- Auto-halt on $300 floor
+- Auto-pause on 60-day BTC underperformance
+- Convert to BTC core hold (dashboard action with double-confirmation)
 
 ---
 
 ## 7. Data Schema
 
-Postgres. All state lives here. No in-memory state survives restart.
+Same 12 tables as v2 (state, params, positions, orders, evaluations, triggers, wakeups, api_spend, errors, system_state_history, app_decisions, price_snapshots).
 
-### 7.1 `state` (singleton key-value)
+**Differences from v2:**
 
+### 7.1 `state` additions
+
+Per-asset cycle range keys:
 ```
-key                              | value
----------------------------------|-------------------------
-phase                            | paper|half|full|paused|halted
-paper_mode                       | bool
-mode_change_pending              | bool (true when paper_mode flag was toggled but app not yet restarted)
-current_regime                   | bull|chop|bear
-peak_value_paper_usd             | numeric
-peak_value_live_usd              | numeric
-starting_capital_paper_usd       | numeric
-starting_capital_live_usd        | numeric
-btc_price_at_start_paper         | numeric
-btc_price_at_start_live          | numeric
-last_btc_price_at_eval           | numeric
-last_eth_price_at_eval           | numeric
-last_sol_price_at_eval           | numeric
-next_eval_at                     | timestamp
-last_boot_at                     | timestamp
-cooldown_until                   | timestamp nullable
-trading_paused                   | bool
-strategy_version                 | text (e.g., "1.0")
-last_wakeup_position_BTC         | timestamp nullable
-last_wakeup_position_ETH         | timestamp nullable
-last_wakeup_position_SOL         | timestamp nullable
-last_wakeup_news_<keyword>       | timestamp nullable (one per active keyword)
-escalations_used_today           | integer
-escalations_used_month           | integer
+cycle_low_zone_top_AERO          | numeric (bottom of "not in cycle low" zone)
+cycle_high_zone_bottom_AERO      | numeric (bottom of cycle high zone)
+cycle_range_computed_at_AERO     | timestamp
+cycle_low_zone_top_LINK          | numeric
+... (one set per watchlist asset)
 ```
 
-P&L-related keys are split per mode (`*_paper_usd` vs `*_live_usd`) so paper history never contaminates live accounting and vice versa. See §13 for full rationale.
-
-### 7.2 `params` (versioned strategy parameters)
-
+Plus:
 ```
-param_name | current_value | min_allowed | max_allowed | version | changed_reason | changed_at
-```
-
-Initial values from this spec at version 1.0. Operator-modifiable; AI cannot modify.
-
-### 7.3 `positions` (open and closed)
-
-```
-id                  | uuid
-asset               | text (BTC|ETH|SOL)
-type                | text (core|swing)
-status              | text (open|closed)
-direction           | text (long; spot only)
-entry_price         | numeric
-quantity            | numeric
-stop_price          | numeric
-target_price        | numeric
-conviction_at_entry | integer
-catalyst            | text
-thesis              | text
-entry_time          | timestamp
-exit_price          | numeric nullable
-exit_time           | timestamp nullable
-exit_reason         | text nullable
-gross_pnl_usd       | numeric nullable
-fees_usd            | numeric nullable
-net_pnl_usd         | numeric nullable
-strategy_version    | text
-regime_at_entry     | text
-stop_order_id       | text (Coinbase order ID)
-tp_order_id         | text (Coinbase order ID)
-entry_order_id      | text (Coinbase order ID)
-paper_mode          | bool
+days_in_current_regime           | integer
+last_regime_change_at            | timestamp
+btc_dominance_30d_avg            | numeric (cached for the morning brief)
 ```
 
-### 7.4 `orders` (every order placed on Coinbase)
+### 7.3 `positions.type` enum
 
-```
-id                   | uuid
-coinbase_order_id    | text
-type                 | text (entry_limit|stop_limit|take_profit|market_exit|dca_limit)
-asset                | text
-side                 | text (buy|sell)
-price                | numeric
-quantity             | numeric
-status               | text (pending|filled|partially_filled|cancelled|expired)
-related_position_id  | uuid nullable
-placed_at            | timestamp
-filled_at            | timestamp nullable
-fill_price           | numeric nullable
-fill_quantity        | numeric nullable
-cancel_reason        | text nullable
-paper_mode           | bool
-```
+v2: `core | swing`
+v3: `btc_core | alt_cycle`
 
-### 7.5 `evaluations` (every AI call: Opus and Sonnet)
+### 7.6 `triggers` table
 
-```
-id                   | uuid
-timestamp            | timestamp
-model                | text (claude-opus-4-7|claude-sonnet-4-6)
-call_type            | text (morning|sonnet_check|opus_escalation|emergency|review|post_restart)
-trigger_source       | text (scheduled|wakeup_position_move|wakeup_stop_fill|wakeup_news|escalation)
-prompt_text          | text (full rendered prompt sent to API)
-response_text        | text (raw response body)
-parsed_response      | jsonb (validated, parsed)
-actions_taken        | jsonb (what the app did with the response)
-input_tokens         | integer
-output_tokens        | integer
-cache_read_tokens    | integer
-cache_write_tokens   | integer
-cost_usd             | numeric
-latency_ms           | integer
-strategy_version     | text
-suppressed           | bool (true if the call was blocked by budget gate)
-suppression_reason   | text nullable
-```
-
-### 7.6 `triggers` (today's watch list from morning brief)
-
-```
-id                | uuid
-morning_eval_id   | uuid (fk to evaluations)
-trigger_id        | text (e.g., "btc-breakout")
-asset             | text nullable
-condition_text    | text
-rationale         | text
-urgency           | text (immediate|next_check)
-active_from       | timestamp
-active_until      | timestamp
-times_evaluated   | integer
-times_fired       | integer
-```
-
-### 7.7 `wakeups` (every event-driven Sonnet wake-up)
-
-```
-id                       | uuid
-timestamp                | timestamp
-trigger_type             | text (position_move|stop_fill|news_keyword)
-asset                    | text nullable
-observed_value           | jsonb (what was observed)
-dispatched               | bool (true if Sonnet was called)
-suppression_reason       | text nullable (debounce|budget|daily_cap|monthly_cap)
-sonnet_eval_id           | uuid nullable (fk to evaluations)
-escalated_to_opus        | bool nullable
-opus_eval_id             | uuid nullable (fk to evaluations)
-opus_action_taken        | text nullable
-```
-
-### 7.8 `api_spend` (every API call's cost, for fast monthly aggregation)
-
-```
-id                   | uuid
-timestamp            | timestamp
-model                | text
-call_type            | text
-input_tokens         | integer
-output_tokens        | integer
-cache_read_tokens    | integer
-cache_write_tokens   | integer
-web_search_count     | integer
-cost_usd             | numeric
-month                | text (YYYY-MM, generated column for fast SUM grouping)
-related_eval_id      | uuid nullable
-```
-
-Index on `(month)`.
-
-### 7.9 `errors` (every caught exception, retry, recovery)
-
-```
-id              | uuid
-timestamp       | timestamp
-severity        | text (info|warning|error|critical)
-component       | text
-error_class     | text
-message         | text
-traceback       | text nullable
-context         | jsonb
-recovered       | bool
-recovery_action | text nullable
-```
-
-### 7.10 `system_state_history` (every state write, append-only audit)
-
-`state` (§7.1) is mutable. This parallel table makes every change auditable forever. Every write to `state` produces a row here.
-
-```
-id              | uuid
-key             | text
-old_value       | jsonb (null for first-time writes)
-new_value       | jsonb
-changed_at      | timestamp
-changed_by      | text (component: 'opus_morning' | 'budget_gate' | 'reconciliation' | 'wakeup_dispatch' | 'manual_dashboard' | 'boot' | etc.)
-related_eval_id | uuid nullable (fk to evaluations)
-```
-
-Index on `(key, changed_at DESC)`. Makes "what was the regime at 14:23 last Tuesday?" answerable forever.
-
-**Implementation requirement:** all writes to `state` go through a `state_writer` utility that creates the history row in the same transaction. No component writes to `state` directly. A test verifies no path bypasses the writer.
-
-### 7.11 `app_decisions` (every app-level decision, for full operator visibility)
-
-Decisions made by application code, distinct from AI decisions. The app makes hundreds of these per day; without logging they're invisible. The dashboard surfaces this directly so the operator can answer "why did the bot do/not do X?"
-
-```
-id              | uuid
-timestamp       | timestamp
-decision_type   | text ('budget_gate' | 'model_route' | 'wakeup_debounce' |
-                       'escalation_dispatch' | 'order_routing' | 'reconciliation_action' |
-                       'circuit_breaker' | 'phase_gate' | 'cooldown_check')
-inputs          | jsonb (everything that went into the decision)
-outputs         | jsonb (what was decided)
-reasoning       | text (human-readable explanation generated by the deciding component)
-related_entity  | text nullable (e.g., 'order:abc123', 'eval:xyz789', 'wakeup:def456')
-```
-
-Examples:
-- Budget gate blocks a Sonnet wake-up: `decision_type: 'budget_gate'`, inputs include MTD spend and projected cost, outputs `{"allowed": false, "reason": "monthly_cap"}`.
-- Debounce suppresses a wake-up: `decision_type: 'wakeup_debounce'`, inputs include trigger and last-fired timestamp, outputs `{"dispatched": false, "remaining_debounce_seconds": 1247}`.
-- Cooldown blocks an entry: `decision_type: 'cooldown_check'`, inputs include last 2 trade outcomes, outputs `{"blocked": true, "until": "..."}`.
-
-Index on `(timestamp DESC)`, `(decision_type, timestamp DESC)`, `(related_entity)`.
-
-### 7.12 `price_snapshots` (market state at every decision point)
-
-Captures market state at every meaningful event. Coinbase tick history may be rate-limited or paywalled later; snapshot at the moment of decision so the dashboard can replay context.
-
-```
-id              | uuid
-timestamp       | timestamp
-trigger_event   | text ('eval_start' | 'order_placed' | 'wakeup_fired' |
-                       'reconciliation_check' | 'manual_snapshot' | 'price_poll')
-related_entity  | text nullable
-btc_price       | numeric
-eth_price       | numeric
-sol_price       | numeric
-btc_dominance   | numeric nullable
-fear_greed      | integer nullable
-```
-
-**Capture rules:**
-- One row at the start of every Opus and Sonnet call
-- One row at every order placement, modification, or cancellation
-- One row at every wake-up trigger fire (regardless of dispatch)
-- One row at every boot reconciliation check
-- One row from the routine 5-minute price polling loop
-
-Index on `(timestamp DESC)`, `(trigger_event, timestamp DESC)`.
-
-That's the entire schema. **Twelve tables.** State, params, positions, orders, evaluations, triggers, wakeups, api_spend, errors, system_state_history, app_decisions, price_snapshots. Together these provide complete operator visibility from the dashboard with no log diving required.
+Same shape as v2. Now generated for both regime stress conditions AND alt cycle conditions (cycle high approach, cycle low invalidation watch).
 
 ---
 
 ## 8. Dashboard
 
-**The dashboard is a first-class deliverable. Frontend effort and polish match backend effort and polish.** This is the operator's window into a system spending real money on real trades — it is not an afterthought.
+Same architecture as v2 §8 (multi-page, first-class, total visibility, shadcn/ui, Tailwind v4, Recharts, Framer Motion, dark mode default, keyboard shortcuts).
 
-The operator must be able to see every AI decision, every app action, and every state change without ambiguity, log diving, or guesswork. If the operator has to ask "what is the bot doing right now?" or "why did it do that?", the dashboard has failed.
+**Content adjustments from v2:**
 
-### 8.1 Design principles
+### 8.3 Overview view emphasizes:
 
-- **Total visibility.** Every AI call's full prompt and response is accessible. Every app-level decision is logged and viewable. Every state change is auditable.
-- **No questions left unanswered.** If the operator might wonder "why?", the dashboard answers it inline.
-- **Tell a story.** Plain English explanations on top, structured data accessible underneath. Don't dump JSON at the user.
-- **Beautiful by default.** Clean typography, deliberate color coding, consistent spacing, real animations. Use shadcn/ui (or comparable polished primitive set) for component consistency. Tailwind v4 for styling. Recharts for charts.
-- **Information density tuned for the operator.** This is a power-user dashboard for one person. Dense and deep — but never confusing.
-- **Real-time where it matters.** Prices stream via WebSocket. AI activity, state changes, alerts update live (SSE or 5-second polling).
-- **Informative empty states.** "No open positions because regime is bear and we're sitting in cash" beats a blank table.
-- **Login-protected, single user.** No RBAC, single password.
+- **BTC benchmark cumulative performance vs. system** (DOMINANT metric, top of page)
+- Phase badge, mode, regime, days in regime, paused/halted state
+- Live ticker: BTC + ETH + each watchlist alt
+- Equity curve (30d) with BTC benchmark overlay
+- BTC core position card
+- Active alt positions with cycle progress bars
+- Last 5 events
+- API spend (less prominent than v2 since cost is lower)
 
-### 8.2 Navigation structure
+### 8.4 Today's Plan view emphasizes:
 
-Single-page application with persistent sidebar (or top-nav). Main views:
+- **Regime call + 30-day regime history strip**
+- BTC core decision (DCA in / hold / DCA out / exit) with reasoning
+- **Alt watchlist with each asset's cycle position visualized as a bar** (cycle low → mid-range → cycle high), color-coded
+- Active alt positions with cycle progress, days held, P&L, distance to next decision point
+- The "discipline check" prominently displayed
+- Today's watch list with current trigger states
 
-1. **Overview** (default landing)
-2. **Today's Plan**
-3. **AI Activity**
-4. **Positions** (open + closed history)
-5. **Decisions & Triggers**
-6. **Performance**
-7. **System**
-8. **Controls**
+### 8.6 Performance view emphasizes:
 
-The implementer may collapse or split these as appropriate, but every information area below MUST be present and easily findable.
+- **BTC benchmark overlay is the dominant feature**, not a sidebar
+- **"Beating BTC over 30d / 60d / all-time" as headline metric** with pass/fail indicator
+- Per-asset cycle trade outcomes
+- Alt cycle "win rate" (cycles caught vs. cycles missed)
+- Bear regime exit performance (how much drawdown was avoided in retrospective)
 
-### 8.3 Overview (default landing)
+### 8.7 New sub-section: Cycle Position view
 
-The "is everything OK at a glance?" view.
+Dedicated view for each watchlist asset:
+- 6-month price chart with cycle low zone and cycle high zone shaded
+- Current cycle position % marked
+- History of bot's entries/exits on this asset overlaid
+- Volume profile
+- Recent news for this asset
 
-- **Top status bar:** phase badge, paper/live mode, current regime + days in regime, paused/halted indicator, time since last AI call
-- **Live ticker strip:** BTC/ETH/SOL prices with green/red tick flash via Coinbase WebSocket
-- **Equity curve (30d)** with BTC benchmark overlay — single dominant chart
-- **Cumulative outperformance vs. BTC** — single prominent number with sparkline
-- **Today's plan synopsis** (3 lines from this morning's brief, with link to full plan)
-- **Open positions** as compact cards: asset, entry, current, %P&L, days held
-- **Last 5 events** of any kind with type icon and one-line summary
-- **API spend strip:** MTD spent / cap, today's spend, projected month-end
-- **Quick actions:** pause, force brief, close all (with confirmations)
+This is the core "cycle trading" instrument the operator uses to evaluate AI judgment.
 
-### 8.4 Today's Plan
-
-The live morning brief, beautifully rendered (not raw JSON).
-
-- **Regime header:** current regime in plain English, evidence summary, regime history strip (last 7 days as colored chips)
-- **Today's intended trades:** each as a card with catalyst, conviction (visual bar), entry/stop/target levels, expected hold, full reasoning paragraph, current state of entry trigger
-- **Watch list:** each trigger as a card with condition, rationale, current observed value, status indicator (🟢 armed / 🟡 firing imminent / 🔵 fired this cycle / ⚪ inactive)
-- **Position management plan:** per-position guidance from the morning brief
-- **Discipline check:** Opus's stated reasons for NOT doing things today (often the most informative section)
-- **Brief metadata:** run time, cost, latency, expandable link to the full prompt/response trace
-
-### 8.5 AI Activity
-
-Chronological feed of every AI call. **The most important page.**
-
-- **Filter bar:** model (Opus/Sonnet), call type, date range, "took action vs. no action," asset
-- **Each entry:** collapsed by default, expandable to:
-  - Full rendered prompt (the long stable system prompt collapsed by default with hash; the dynamic user message and data package shown by default)
-  - Full raw response from the API
-  - Parsed structured output (pretty-printed JSON with syntax highlighting)
-  - Reasoning text extracted and highlighted for readability
-  - Action(s) taken by the app, with links to created/modified entities
-  - Cost, input/output tokens, cache read/write tokens, latency
-  - Links to related positions, orders, triggers, price snapshot at decision time
-- **Morning briefs** get special card treatment (rendered like §8.4) instead of compact entries
-- **Sonnet checks** show as one-line entries by default; expand for full detail
-- **Search box:** full-text search over prompts and responses
-
-### 8.6 Positions
-
-**Open positions** — full-detail card per position:
-- Asset, type (core/swing), entry price, current price, %P&L (live)
-- Stop loss, take profit, trailing stop progress with visual indicator
-- Coinbase order IDs visible for entry/stop/take-profit (verifies exchange-side protection)
-- Days held, conviction at entry, conviction trajectory if updated
-- Catalyst (one line), thesis (paragraph)
-- **Timeline:** every AI evaluation that touched this position, with the action taken, in chronological order
-- Per-position P&L sparkline since entry
-
-**Closed positions** — sortable, filterable table:
-- Asset, entry/exit prices, days held, P&L (gross + net), exit reason, strategy version
-- Click row to open trade lifecycle view: chronological list of every event for this trade (morning briefs that mentioned it, Sonnet checks, escalations, order events, exit decision)
-- Per-trade P&L sparkline
-
-### 8.7 Decisions & Triggers
-
-The "why did the bot do or not do X?" page.
-
-**Today's watch list** — each trigger with current state, last evaluated time, fire count today.
-
-**Wake-up history** — chronological list of every wake-up trigger fire:
-- Trigger type, observed value, asset (if any)
-- Dispatched (Sonnet called)? Suppressed (with reason)?
-- Resulting Sonnet evaluation (link to AI Activity entry)
-- Escalated to Opus? Action taken?
-- Price snapshot at fire time
-
-**Wake-up statistics** — per-trigger-type counts, escalation rates, actionable rates (7d / 30d). Identifies noise triggers for operator review.
-
-**App decisions stream** — filterable list of every app-level decision (from `app_decisions`):
-- Budget gate calls (allow/block, reason)
-- Model routing decisions
-- Wake-up debounce hits
-- Escalation dispatches
-- Reconciliation actions
-- Circuit breaker checks
-- Cooldown blocks
-- Each entry expandable to inputs / outputs / reasoning
-
-**State change log** — filterable view of `system_state_history`:
-- Every key change with old → new value, who changed it, and the eval/action that caused it
-- "What was the regime at 14:23 yesterday?" answerable in one click
-
-### 8.8 Performance
-
-- **Equity curve** with toggleable timeframes (7d / 30d / 90d / all-time)
-- **BTC benchmark overlay** on every timeframe
-- **Cumulative outperformance** chart (system return − BTC return over time)
-- **Drawdown chart** (distance from peak)
-- **P&L breakdown:** realized, unrealized, fees paid, by asset, by trade source (morning brief vs. escalation)
-- **Trade statistics:** win rate, average win, average loss, R-multiple distribution histogram
-- **Fee drag:** total fees as % of gross P&L
-- **API cost vs. trading P&L:** the honest comparison (even though API is subsidized, this shows the math)
-- **Per-strategy-version segmentation** when multiple versions exist
-
-### 8.9 System
-
-- **Boot history:** every restart with downtime, reconciliation outcome, discrepancies found
-- **Error log:** filterable by severity (info / warning / error / critical), date, component
-- **API budget detail:** MTD spend, daily spend chart, breakdown by call type, by model, by day, projection vs. cap
-- **Cache hit rates** per model (last 7 days) — drops indicate prompt structure changed
-- **Last successful action per type:** last successful Opus call, Sonnet call, reconciliation, order placement, price poll — quickly answers "is anything stuck?"
-- **Phase progress card:** every Phase advancement criterion with current value, threshold, pass/fail badge, days remaining in current phase
-- **Wake-up trigger health:** for each of the 3 hardcoded wake-up triggers, the fire count, escalation rate, actionable rate, current debounce state
-
-### 8.10 Controls
-
-- **Pause / Resume** trading
-- **Close all positions** (double-confirmation, market exits)
-- **Force morning brief** now (counts against budget; warning shown if would exceed cap)
-- **Force reconciliation** (re-run §6.1 without restarting)
-- **Toggle paper/live** (gated by Phase 1 criteria; double-confirmation if criteria pass; triple-confirmation if operator overrides a failing gate)
-- **Convert to BTC core hold** (double-confirmation, irreversible warning, full explanation of consequences)
-- **Strategy parameters** view (read-only by default; edit-mode toggle exposes editing with required `changed_reason` text logged to `params`)
-
-### 8.11 Real-time updates
-
-- **WebSocket:** Coinbase Exchange WS at `wss://ws-feed.exchange.coinbase.com` for BTC/ETH/SOL ticker (no auth required for ticker channel). Updates live ticker strip and position current prices on every tick.
-- **Server-Sent Events or 5-second polling:** new AI activity, state changes, new wake-ups, new positions opened/closed.
-- **Manual refresh button** on every page for explicit re-fetch.
-
-### 8.12 Tech recommendations
-
-The dashboard is now a first-class concern; pick tools accordingly.
-
-- **Stay on Next.js 16** (App Router, already in use). The hybrid SSR/CSR fits this use case.
-- **shadcn/ui** for primitives (button, card, table, dialog, dropdown, sheet, command palette). Provides design polish without library lock-in.
-- **Tailwind v4** for styling (already in use). Use a deliberate color system — semantic colors for state (success/warning/danger/muted), not raw palette.
-- **Recharts** for all charts (already installed but not used).
-- **SWR** for data fetching with revalidation (already in use).
-- **Server components** for initial page loads (data already lives on the server).
-- **Client components** for interactive elements and live updates.
-- Consider **Framer Motion** for tasteful transitions (page loads, expand/collapse, status changes). Animations should feel intentional, not gratuitous.
-- **Dark mode by default** — operator stares at this for hours.
-- **Keyboard shortcuts** (e.g., `g o` → Overview, `g a` → AI Activity, `cmd+k` → command palette). Power-user dashboard.
-
-### 8.13 Acceptance criteria for the dashboard
-
-Before the bot enters paper trading:
-
-- [ ] All 8 main views render with real data
-- [ ] AI Activity shows full prompts and responses for every call
-- [ ] Today's Plan renders the morning brief beautifully (not raw JSON)
-- [ ] Positions page shows Coinbase order IDs for stops and take-profits
-- [ ] Decisions & Triggers page shows app decision stream and state change log
-- [ ] Performance page shows equity curve with BTC overlay
-- [ ] System page shows phase progress with criterion-by-criterion pass/fail
-- [ ] Controls page actions all work, with appropriate confirmations
-- [ ] WebSocket prices update live
-- [ ] Real-time AI activity updates without page refresh
-- [ ] Empty states are informative, not blank
-- [ ] Operator has reviewed the dashboard end-to-end and confirmed every section is clear
+Other views (AI Activity, Decisions & Triggers, System, Controls) same structure as v2.
 
 ---
 
-## 9. Tech Stack Recommendations (non-binding)
+## 9. Tech Stack
 
-The implementer chooses. Suggested for fast time-to-ship:
-
-- **Runtime:** Bun or Node.js. Either is fine.
-- **Web framework:** Hono (lighter than Next.js, faster cold starts) OR Next.js if rebuilding the dashboard from scratch is too disruptive.
-- **Database:** Postgres on DigitalOcean managed cluster (current setup is fine).
-- **ORM:** Drizzle (already in use) or kysely. Avoid heavy ORMs.
-- **Anthropic SDK:** `@anthropic-ai/sdk` with prompt caching enabled.
-- **Coinbase:** direct REST calls with JWT auth (current implementation pattern works).
-- **Hosting:** DigitalOcean App Platform basic-xxs (current setup).
-- **Scheduler:** in-process via setInterval, backed by `state.next_eval_at` for restart safety.
-- **Frontend:** server-rendered HTML + a sprinkle of JS for the equity chart, OR keep Next.js. The dashboard is one page; ship whatever is fastest.
-
-The hardest constraint is the AI orchestration. Don't over-engineer the rest.
+Same as v2 §9:
+- Next.js 16, React 19, TypeScript strict, Tailwind v4
+- shadcn/ui, Recharts, Framer Motion, SWR
+- Drizzle ORM, Postgres on DO
+- Anthropic SDK, Coinbase REST direct
+- DO App Platform basic-xxs
 
 ---
 
 ## 10. Acceptance Criteria
 
-Before flipping `paper_mode = false`:
+Same backend + frontend acceptance criteria as v2 §10, plus:
 
-**Backend code:**
-- [ ] All 12 tables created with foreign keys enforced at the DB level
-- [ ] Boot sequence with reconciliation passes integration test
-- [ ] `budget_gate()` blocks calls correctly at each threshold
-- [ ] Test: no Sonnet response can result in an order action without an Opus call
-- [ ] Test: morning brief Opus call always runs even if monthly cap exceeded (alert, but run)
-- [ ] Test: each of the 3 wake-up triggers fires correctly and respects debounce
-- [ ] Test: stop-limit reconciliation places a stop if one is missing on boot
-- [ ] Coinbase API key is TRADE-only (boot refuses to start if withdrawal permission detected)
-- [ ] All AI calls produce a row in `evaluations` AND `api_spend` within 5 seconds
-- [ ] All caught exceptions produce a row in `errors`
-- [ ] All `state` writes go through `state_writer` and produce a `system_state_history` row (test verifies no path bypasses)
-- [ ] All app-level decisions (budget gate, model route, debounce, dispatch, reconciliation, circuit breaker, cooldown) produce an `app_decisions` row
-- [ ] Price snapshots captured at every decision point per §7.12 capture rules
-- [ ] Paper-mode toggle is rejected when Phase 1 criteria are not met
-- [ ] AI prompts never include API cost data
-
-**Frontend (matches backend in care and polish):**
-- [ ] All 8 main views (§8.2) render with real data
-- [ ] AI Activity shows full prompts AND responses for every call, with syntax highlighting and reasoning extraction
-- [ ] Today's Plan renders the morning brief beautifully (rendered cards, not raw JSON)
-- [ ] Positions page shows Coinbase order IDs for stops and take-profits, with timeline of every AI eval that touched the position
-- [ ] Decisions & Triggers page shows app decision stream AND state change log (`system_state_history`)
-- [ ] Performance page shows equity curve with BTC overlay, drawdown, P&L breakdown, R-multiple distribution
-- [ ] System page shows phase progress with criterion-by-criterion pass/fail
-- [ ] Controls page actions all work, with appropriate confirmations
-- [ ] WebSocket prices update live (Coinbase Exchange WS)
-- [ ] Real-time AI activity updates without page refresh (SSE or 5s poll)
-- [ ] Empty states are informative, not blank ("No positions because regime is bear...")
-- [ ] Design system in place (shadcn/ui or comparable) — consistent components throughout
-- [ ] Dark mode default
-- [ ] Keyboard shortcuts implemented (at least: nav shortcuts + cmd+k command palette)
-- [ ] Operator has reviewed the dashboard end-to-end and confirmed every section is clear
-
-**Operations:**
-- [ ] 30 days of paper trading completed
-- [ ] All Phase 1 advance criteria pass (§6.3)
-- [ ] Operator has read morning briefs and judged them coherent
+**Strategy-specific:**
+- [ ] Cycle range computation runs nightly and stores correct values per asset
+- [ ] Bot refuses to enter alts when regime = bear (verified by integration test)
+- [ ] Bot exits all alts when regime transitions to bear (verified by simulated transition)
+- [ ] BTC core DCA in/out logic works (verified by simulated regime transition)
+- [ ] BTC benchmark calculation is correct and tamper-proof (anchor price stored in `state` at startup, never recomputed)
+- [ ] 60-day BTC underperformance gate triggers correctly when crossed
 
 ---
 
 ## 11. What NOT to Build
 
-Listed because previous iterations of this project over-engineered. Do not build any of the following without explicit operator approval after the bot is in Phase 3 and demonstrably profitable.
+Inherits all NOT-BUILD items from v2 §11. Additional v3-specific items:
 
-- **Tertiary asset universe.** BTC/ETH/SOL only. No human-approval flow for additional assets.
-- **Strategy self-modification.** The bot does NOT adjust its own parameters. The operator does it manually based on observed performance after Phase 2.
-- **Watcher rubric self-modification / self-improving routing layer.** The morning brief produces a fresh watch list each day. There is no separate "rubric" entity that learns over time. Today's plan is not persistent learnable state.
-- **5+ wake-up trigger types.** Three. If three turns out not to be enough after 30+ days of operation, add one via code change.
-- **Backoff state machine with multiple levels.** If you're hitting the budget cap, alert the operator. Don't silently degrade.
-- **Operator role / RBAC.** Single password, single user, single role.
-- **Extended thinking on every call.** Max effort on the morning brief. Medium on Opus escalations. Sonnet runs without thinking.
-- **Web search as a regular polling source.** Web search is for use inside Opus calls only. RSS feeds are the polling source for news triggers.
-- **WebSocket price feed for trading logic.** WebSocket for dashboard display only. Polling REST every 5 minutes is the source of truth for trigger evaluation.
-- **Notification systems beyond the dashboard.** No Telegram bots. No Discord webhooks. No SMS. The dashboard is the surface.
-- **Strategy versioning machinery beyond a `strategy_version` text field.** No major/minor semver math. Just bump the string when params change.
-- **A "watcher_rubrics" table.** The watch list lives in `triggers` for today only. No persistence beyond the day.
-- **Any "phase 2 of the supplement" feature.** This document IS the supplement. There is no further architectural overlay coming.
-
-**What you SHOULD spend extra effort on (overrides any "minimum viable" instinct):**
-
-- **The dashboard.** Match backend effort with frontend effort. Polish the design, the typography, the animations, the empty states, the color system. This is the operator's daily interface; it should feel as carefully built as the trading logic.
-- **AI activity rendering.** Don't show prompts and responses as raw text dumps. Pretty-print, syntax-highlight, extract reasoning sections, link to related entities. The operator must be able to follow the AI's thinking without effort.
-- **Forensic logging.** `system_state_history`, `app_decisions`, `price_snapshots` exist so the operator can answer any "why" question from the dashboard. They are not optional.
-
-If an implementation agent finds itself building something not in this spec, or extending it "for completeness," **stop and ask the operator first.**
+- **Tighter swing trading on top of cycle trades.** Don't cross strategies. If the bot has an alt cycle position and the AI thinks there's a 2-day swing in BTC, that's noise. Stay focused on the cycle trade.
+- **Catalyst-driven entries on top of cycle entries.** Cycle position IS the entry signal. Don't add "but BTC ETF inflows" as a secondary entry trigger; it complicates the model and degrades the cycle discipline.
+- **Auto-adding watchlist assets.** The watchlist is hardcoded. Operator-managed via deploy.
+- **AI-driven cycle range recalibration.** The 6-month range is mechanical. AI doesn't override it (only interprets it).
+- **Re-entry of an alt within 14 days of exit.** If the bot exits on cycle invalidation, it cannot buy back in for at least 14 days. Prevents whipsaw.
+- **More than 2 active alt positions at $500 capital size.** Concentration in best setups beats diluted exposure.
+- **Hourly Sonnet checks.** Daily + 2 watch checkpoints + event triggers is the cadence. Don't add more "for completeness."
 
 ---
 
-## 12. Failure Modes (honest list)
+## 12. Failure Modes
 
-Things that will probably go wrong, and what happens:
+Most v2 failure modes apply. v3-specific additions:
 
-- **Opus produces a low-quality regime call.** The morning brief includes review of yesterday's call and outcomes — pattern of bad calls becomes visible. Operator pauses bot, investigates the prompt, iterates on the system prompt.
-- **Bot sits in cash for two weeks.** This is correct behavior in chop or bear regimes. Not a bug.
-- **Bot enters a trade then immediately stops out.** Pattern of this means poor entry confirmation. Operator tightens conviction threshold to 75 in `params`.
-- **Bot underperforms BTC by trading too much.** The 60-day check catches it. Convert to BTC core hold per §4.4.
-- **API costs run hot in volatile weeks.** Operator gets alerted. Decides to add budget for the month or pause Sonnet checks manually. No automated backoff.
-- **Coinbase outage during a stop-fill.** Stop is exchange-side, fires regardless of bot state. Boot reconciliation picks up the fill.
-- **Anthropic outage during morning brief.** Retry every 5 minutes for 30 minutes. After 30 minutes, log missed eval, skip. Existing positions are protected by exchange-side stops.
-- **Database loss.** Daily automated backups to a separate location. If state is lost, bot effectively restarts in observation mode (no positions, no trade history). Trades on Coinbase are recoverable from Coinbase's order history.
-- **The strategy doesn't make money in 30-day paper.** Phase 1 criteria fail. Iterate on the strategy in paper for another 30 days OR shut it down. Don't go live with a strategy that hasn't earned the right.
+- **Regime detector calls bear too early:** bot sells in chop, misses next leg up. Mitigation: regime change requires written evidence; pattern of bad calls visible in dashboard; operator can iterate on prompt.
+- **Regime detector calls bear too late:** bot rides 50% drawdown before exiting. **This is the single largest risk.** Mitigation: regime transitions can be one-level-per-day (no jumping bull → bear), but the AI must be willing to call chop quickly. Operator monitors regime-call lag during paper phase.
+- **Whipsaw across the regime boundary:** bot in/out/in/out around the 200-day MA. Mitigation: regime change requires sustained evidence (not single-day moves); 14-day re-entry cooldown for alts.
+- **Alt cycle bag-holding:** bot enters at cycle low, asset never bounces, "cycle invalidation" only fires after 50% loss. Mitigation: 12% initial soft stop; cycle invalidation rule is precise (break of range floor on volume).
+- **All watchlist alts in cycle low simultaneously (bear setup):** bot wants to enter many positions but allocation cap (30%) limits to 2-3. Correct behavior — don't override.
+- **No watchlist alts ever reach cycle low (extended bull):** bot just holds BTC. This is correct. The bot may underperform by a few percent for not catching alt season, but BTC carries.
 
 ---
 
-## 13. Paper Mode Architecture (first-class isolation)
+## 13. Paper Mode Architecture
 
-Paper mode is not "the live code with a flag set." It is a separately reasoned, separately tested execution path that shares AI and decision logic with live mode but **cannot reach Coinbase's order placement endpoints under any circumstance**. Without proper isolation, paper mode is dangerous — a single bug can quietly place real orders, pollute live P&L, or corrupt reconciliation.
+**Identical to STRATEGY.md v2 §13.** All sub-sections (13.1-13.10) apply unchanged:
 
-### 13.1 Risk model
+- §13.2 Code path isolation (separate live-executor.ts and paper-executor.ts)
+- §13.3 Database isolation (paper_mode NOT NULL, query helpers, lint rule)
+- §13.4 Mode invariance (loaded once at boot)
+- §13.5 Mode transition gates (preconditions + typed-phrase confirmation)
+- §13.6 Paper executor behavior
+- §13.7 Reconciliation isolation (cross-mode boot rejection)
+- §13.8 Eight non-negotiable safety tests
+- §13.9 Visual safety in dashboard
+- §13.10 What this prevents
 
-Specific failures this section prevents:
-- A real order placed when the operator believed the system was in paper mode
-- A paper position polluting live P&L computation
-- Reconciliation confused by mixed paper/live state and "fixing" the wrong thing
-- A mode flip leaves stale state behind that the next session operates on
-- A "tested in paper" code path that quietly diverges from live and breaks on the first real order
-
-### 13.2 Code path isolation
-
-The function that places a real Coinbase order is **physically distinct** from the function that simulates one. They share an interface but their implementations live in different files, and **neither imports anything from the other**.
-
-```
-src/lib/execution/
-  ├── interface.ts         // OrderExecutor interface
-  ├── live-executor.ts     // Calls Coinbase order endpoints
-  ├── paper-executor.ts    // Simulates orders against real prices
-  ├── factory.ts           // Returns the correct executor based on mode AT BOOT
-  └── market-data.ts       // Shared price/candle reader (used by both modes)
-```
-
-Read endpoints (prices, candles, account balance) are shared via `market-data.ts` — both modes need real market data. **Write endpoints (orders, cancels, modifications) live ONLY in `live-executor.ts`** and are guarded by an in-method assertion on top of the file isolation.
-
-The factory is called once at boot, returns one executor for the session's lifetime, and the rest of the codebase holds a typed `OrderExecutor` reference. **The mode flag is never re-read at runtime — the executor object IS the mode.**
-
-This eliminates flag-check-at-every-order-site bugs by construction.
-
-### 13.3 Database isolation
-
-The `paper_mode` column on `positions` and `orders` is `NOT NULL`. Every query that touches positions or orders MUST filter by mode.
-
-Two query helpers live in `src/lib/db/queries/`:
-
-```typescript
-positionsForCurrentMode()  // default; filters by mode at query time
-positionsAllModes()        // explicit; only used by reconciliation diagnostics and analytics
-```
-
-There is no third helper. The default enforces isolation; the explicit one is rare and grep-able. CI rejects any direct query of `positions` or `orders` outside these helpers (lint rule).
-
-P&L-related state keys are split per mode (see §7.1). The dashboard and computation logic reads the variant matching the current mode. Drawdown is always computed against the current mode's peak.
-
-### 13.4 Mode loading and invariance
-
-- Mode is loaded from `state.paper_mode` exactly **once, at boot**, into the executor factory
-- The mode is then **invariant for the session**
-- Toggling the mode in the dashboard writes to `state.paper_mode` and sets `state.mode_change_pending = true` but does NOT take effect until the operator restarts the app
-- The dashboard surfaces this loudly: "MODE CHANGE PENDING — RESTART REQUIRED"
-
-Live runtime mode flipping is a class of bug that can only cause damage. There is no legitimate scenario in which flipping mode mid-session is the right action.
-
-### 13.5 Mode transition safety
-
-The toggle from paper → live (or live → paper) is gated by these preconditions, **enforced server-side**:
-
-- **No open positions in either mode.** Operator must close-all first.
-- **No pending orders in either mode.**
-- **All reconciliation completed.** No outstanding pending timers or unreconciled orders.
-- **For paper → live specifically:** all Phase 1 advance criteria pass (per §6.3).
-- **Operator double-confirmation:** typed phrase ("transition to live trading" or "transition to paper trading"), not just a button click.
-
-After confirmation, the toggle writes the new value, sets `mode_change_pending = true`, and the dashboard displays "RESTART REQUIRED" prominently. **All order placement (paper or live) is blocked from the moment the toggle is confirmed until the next successful boot.**
-
-### 13.6 Paper executor behavior
-
-The paper executor:
-- Receives the same `placeOrder()` calls that the live executor would receive
-- Validates the order shape (stop within range, R:R ≥ 2, size within limits, etc.) — same validation as live
-- Generates synthetic Coinbase order IDs (e.g., `paper-{uuid}`)
-- Writes to `orders` with `paper_mode = true`
-- Simulates fills against **real Coinbase prices** fetched from the shared market data provider — NOT a mock price feed. The strategy must be tested against real market behavior.
-- Simulates stop-limit and take-profit triggers based on the real price stream
-- Computes fees using the actual Coinbase fee schedule (~0.4% maker, ~0.6% taker)
-- Writes simulated fills with `fill_price`, `fill_quantity`, `paper_mode = true`
-- Closes positions when stops/take-profits trigger; computes paper P&L net of simulated fees
-
-**The paper executor never makes a network call to Coinbase's order, cancel, or modification endpoints.** This is enforced by the file-level isolation in §13.2 AND verified by the test in §13.8.
-
-### 13.7 Reconciliation isolation
-
-Boot reconciliation (per §6.1) operates on the current mode's data only:
-
-- **Paper mode boot:** queries `positions WHERE paper_mode = true AND status = 'open'`. Verifies internal consistency only — there is nothing on Coinbase to reconcile against. The position safety check verifies that the simulated stop-limit order still exists in the simulated `orders` rows.
-- **Live mode boot:** queries `positions WHERE paper_mode = false AND status = 'open'`. Reconciles against Coinbase's actual order/balance state.
-
-**Boot refuses to start if it finds open positions in the OTHER mode.** Live boot finding open paper positions = bad mode transition occurred. Operator must investigate before proceeding. The app halts with an actionable error: "Open paper positions found while booting in live mode. Close paper positions or boot in paper mode first."
-
-### 13.8 Tests that MUST pass before paper trading begins
-
-These tests are **non-negotiable** for Phase 1 paper trading to start:
-
-- **No live order in paper mode.** Force paper mode, run the AI flow end-to-end through `placeOrder()`, assert that the mock HTTP layer recorded zero requests to Coinbase order endpoints. Test fails if any matching request is made.
-- **Mode invariance.** Boot in paper mode. Mutate `state.paper_mode = false` directly in the DB. Attempt to place an order. Assert the order is still routed to the paper executor (the executor object is the mode, not the flag).
-- **Mode transition gate.** Attempt to flip paper → live with open paper positions. Assert rejection. Repeat for: pending orders, failing Phase 1 criteria, missing typed-phrase confirmation.
-- **Cross-mode boot rejection.** Plant an open paper position. Boot in live mode. Assert app refuses to start with the actionable error.
-- **Query helper enforcement.** CI lint rule: any direct query of `positions` or `orders` outside the two query helpers fails the build.
-- **Reconciliation isolation.** Plant both a paper position and a live position. Boot in paper mode. Assert reconciliation only touches the paper position; the live position remains untouched.
-- **P&L isolation.** Insert mixed paper+live closed trades. Compute equity curve for the current mode. Assert it includes only current-mode trades.
-- **Order endpoint guard.** Static analysis: `live-executor.ts` is the ONLY file that imports the Coinbase client's `placeOrder` / `cancelOrder` methods. Any other file importing them fails the build.
-
-### 13.9 Visual safety in the dashboard
-
-- **Mode badge** is the most prominent element on every page (top-left, large, color-coded: blue for paper, red/orange for live)
-- **"MODE CHANGE PENDING — RESTART REQUIRED"** banner is impossible to miss when `state.mode_change_pending = true`
-- All position cards, order lists, P&L numbers, and equity curves are visually tagged with their mode
-- The Controls page mode toggle requires the typed-phrase confirmation, not a click
-- The toggle is disabled (with a clear explanation of which precondition is unmet) when §13.5 preconditions are not satisfied
-
-### 13.10 What this prevents
-
-This isolation makes the following classes of bug **unreachable, not just unlikely**:
-
-- A bug in any controller, scheduler, or AI flow path cannot accidentally route to live order placement when in paper mode (executor object identity vs. flag check)
-- A query that forgets to filter by mode cannot return mixed rows (default helpers enforce filtering; CI rejects bypasses)
-- A successful test in paper mode is meaningful for live mode because both share validation, sizing, and the AI flows — only the order endpoint differs
-- A mode transition cannot leave inconsistent state across paper/live accounting (boot refuses to start in such a state)
-
-The bot will spend its first 30 days exclusively in paper mode and another 30 days at half-size live. Both phases must be safe.
+This is unchanged because paper mode safety is independent of trading strategy. The same isolation requirements apply whether the bot is doing swing trades or cycle trades.
 
 ---
 
 ## 14. Closing Note
 
-The bot's edge is **discipline, not intelligence**. A simple rule-following bot that beats BTC hold is more valuable than a clever bot that doesn't.
+The bot's edge is **discipline over cycles**. The hardest skills in crypto are (1) going to cash before the bear and (2) buying alt cycle bottoms without panic. A bot that does these two things reliably will beat BTC.
 
-Four things to keep in mind during implementation and operation:
+Six things to keep in mind during implementation and operation:
 
-**1. The bot must earn the right to keep trading.** The 60-day BTC underperformance check is the most important rule in this document. Honor it. If the bot can't beat doing nothing, stop the bot.
+**1. Beat BTC or fold.** The 60-day rolling underperformance check is the most important rule in this document. Honor it. No exceptions, no extensions, no "just one more month."
 
-**2. Spend AI when it matters, not for show.** $50/month is plenty if the model is only called when something might actually change. The morning brief sets the day's hypothesis. Sonnet checks if the hypothesis is still true. Opus is woken when the answer changes.
+**2. BTC is the default.** Active positions require positive evidence. Passive BTC does not. The bot should prefer to do nothing.
 
-**3. When in doubt, do nothing.** Default to cash. Default to no trade. Default to no parameter change. Default to no new backend feature. The cost of inaction is tiny; the cost of a bad action can be the entire account.
+**3. Bear regime means cash.** Period. No alt "diversification," no "this trade is special," no carveouts. Cash.
 
-**4. The frontend is half the deliverable.** The operator must see everything: every AI prompt and response, every app decision, every state change, every wake-up trigger fire, every order placement. Match backend effort with frontend effort. Polish typography, animations, empty states, color systems. The dashboard is how the operator validates that the bot is doing what it should — if the dashboard isn't clear, the discipline rules are unenforceable.
+**4. Alt cycles are satellites, not core.** They add upside; they don't carry the portfolio. A single failed alt should hurt; it should never blow up the bot.
 
-**5. Paper mode is real money.** Not in the trading sense — but in the bug-class sense. A paper-mode bug that places a real order is the same outcome as a live-mode bug. Treat paper mode isolation as a critical-path safety system, not a convenience feature.
+**5. The frontend is half the deliverable.** Same as v2. Match backend effort with frontend effort.
+
+**6. Paper mode is real money.** Same as v2. Treat the isolation in §13 as critical-path safety.
 
 That's the system.
