@@ -11,6 +11,7 @@ The complete strategy specification is in `DEFINITIVE_TRADING_STRATEGY.md` (922 
 - **Mode**: Paper trading (simulated). No real trades will execute until switched to live mode via Controls page.
 - **Account**: $500.03 USDC on Coinbase (old API key: 88674a25). The portfolio API treats USDC as cash.
 - **GitHub**: Private repo at `masonrogers/huny-money`, auto-deploy on push is configured but sometimes doesn't trigger — use `force_build: true` via DO API if needed.
+- **AI Model**: Claude Opus 4.7 with extended thinking (16k thinking budget, 25k max tokens). All AI calls go through `src/lib/ai/client.ts`.
 
 ## Stack
 - **Framework**: Next.js 16 (App Router, Turbopack)
@@ -55,6 +56,16 @@ No external cron. `instrumentation.ts` runs `boot.ts` then `scheduler.ts` on ser
 
 ### Frontend (src/app/)
 - 8 pages + login: Dashboard, Positions, Trades, Evaluations, Regime, Strategy, Reconciliation, Controls
+- **Dashboard (page.tsx)** is a control board with:
+  - Live-streaming BTC/ETH/SOL prices via Coinbase WebSocket (per-second updates, green/red flash on ticks)
+  - Portfolio summary with return from starting capital
+  - System card showing model name, mode, next eval countdown, circuit breakers
+  - Market regime with plain English explanation and AI evidence
+  - AI Outlook: latest eval decision summary, active theses per asset with conviction bars
+  - Open positions table with entry/current/P&L/stop/target
+  - Recent Activity feed: evaluations + alerts merged chronologically with human-readable labels
+  - Informative empty states explaining why sections are empty
+- **WebSocket hook** (`src/lib/hooks/use-coinbase-ticker.ts`): connects directly to `wss://ws-feed.exchange.coinbase.com` (public, no auth needed), subscribes to ticker channel for BTC-USD/ETH-USD/SOL-USD, auto-reconnects with exponential backoff
 - Auth: JWT session cookie (`huny_session`), 7-day expiry, verified in middleware using jose
 - Middleware protects all routes except: /login, /api/auth/*, /api/healthz, /api/cron/*, /_next/*, /favicon*
 - `AppShell` component conditionally renders sidebar/header (hidden on /login)
@@ -64,7 +75,7 @@ No external cron. `instrumentation.ts` runs `boot.ts` then `scheduler.ts` on ser
 
 ### API Routes (src/app/api/)
 - **Cron** (3): /evaluate, /timers, /price-check — authenticated via CRON_SECRET
-- **Dashboard** (7): /portfolio, /positions, /trades, /evaluations, /regime, /strategy, /reconciliation, /alerts — read-only GET, session auth
+- **Dashboard** (8): /portfolio, /positions, /trades, /evaluations, /regime, /strategy, /reconciliation, /alerts — read-only GET, session auth
 - **Controls** (7): /pause, /close-all, /force-evaluation, /toggle-paper, /regime-override, /approve-asset, /force-reconciliation — POST, session auth
 - **Auth** (3): /login, /logout, /check
 - **Other**: /healthz (public), /debug (session auth, shows DB table status)
@@ -119,8 +130,12 @@ No external cron. `instrumentation.ts` runs `boot.ts` then `scheduler.ts` on ser
 
 9. **Two Coinbase API keys exist**: Key 88674a25 (old, has $500 USDC — THIS IS THE ONE IN USE) and key 7b288729 (new, empty account). Don't switch to the new key.
 
+10. **Extended thinking with Opus**: `callClaude` in `src/lib/ai/client.ts` uses `thinking: { type: 'enabled', budget_tokens: 16000 }` with `max_tokens: 25000`. The response contains both thinking blocks and text blocks — only the text block is extracted. Temperature is locked to 1.0 by the API when thinking is enabled. Prompt caching (`cache_control: { type: 'ephemeral' }`) works with thinking.
+
+11. **Live price WebSocket is public**: The Coinbase Exchange WebSocket at `wss://ws-feed.exchange.coinbase.com` does not require authentication for the ticker channel. This is the legacy Exchange feed, not the Advanced Trade WebSocket (which requires JWT auth). Used only for dashboard display, not trading.
+
 ## What Works
-- Dashboard loads with real portfolio data ($500 USDC from Coinbase)
+- Dashboard control board with live-streaming BTC/ETH/SOL prices (WebSocket), portfolio summary, regime explanation, AI outlook with theses, positions table, activity feed
 - Login/logout with JWT sessions
 - Sidebar navigation across all pages
 - Controls page (pause, resume, paper/live toggle, force evaluation, reconciliation, regime override)
