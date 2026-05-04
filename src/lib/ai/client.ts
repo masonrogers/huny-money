@@ -10,19 +10,30 @@ function getAnthropic(): Anthropic {
   return _anthropic;
 }
 
-export const MODEL = 'claude-sonnet-4-6';
-export const MAX_TOKENS = 8192;
+export const MODEL = 'claude-opus-4-7';
+export const MAX_TOKENS = 25000;
+export const THINKING_BUDGET = 16000;
 
 export async function callClaude(params: {
   systemPrompt: string;
   userMessage: string;
   maxTokens?: number;
+  thinkingBudget?: number;
 }): Promise<string> {
-  const { systemPrompt, userMessage, maxTokens = MAX_TOKENS } = params;
+  const {
+    systemPrompt,
+    userMessage,
+    maxTokens = MAX_TOKENS,
+    thinkingBudget = THINKING_BUDGET,
+  } = params;
 
   const response = await getAnthropic().messages.create({
     model: MODEL,
     max_tokens: maxTokens,
+    thinking: {
+      type: 'enabled',
+      budget_tokens: thinkingBudget,
+    },
     system: [
       {
         type: 'text',
@@ -38,7 +49,6 @@ export async function callClaude(params: {
     ],
   });
 
-  // Log token usage for cost tracking
   const { input_tokens, output_tokens } = response.usage;
   const usage = response.usage as unknown as Record<string, number>;
   const cacheRead = usage.cache_read_input_tokens ?? 0;

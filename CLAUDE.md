@@ -18,7 +18,7 @@ The complete strategy specification is in `DEFINITIVE_TRADING_STRATEGY.md` (922 
 - **CSS**: Tailwind CSS v4
 - **ORM**: Drizzle ORM with postgres.js driver
 - **Database**: PostgreSQL on DigitalOcean managed cluster `db-postgresql-nyc3-00644`, database name `huny_money`
-- **AI**: Anthropic Claude (claude-sonnet-4-20250514) via @anthropic-ai/sdk
+- **AI**: Anthropic Claude (claude-opus-4-7, extended thinking enabled) via @anthropic-ai/sdk
 - **Exchange**: Coinbase Advanced Trade API v3 with CDP JWT auth (ES256 via jose)
 - **Hosting**: DigitalOcean App Platform, basic-xxs ($5/mo), app ID `e3f67164-bc0f-481e-a17d-cb1a33c3c440`
 - **Charts**: Recharts (installed but not yet used in dashboard)
