@@ -9,6 +9,8 @@ import { assertTradeOnlyKey, getAllBalances, getTicker } from "@/lib/coinbase";
 import { startScheduler, type SchedulerHandlers } from "@/lib/scheduler";
 import { runCycleRangeJob } from "@/lib/scheduler/cycle-range-job";
 import { runScheduledMorningBrief } from "@/lib/orchestration/morning-brief";
+import { runScheduledSonnetCheckpoint } from "@/lib/orchestration/sonnet-checkpoint";
+import { runWakeupCycle } from "@/lib/orchestration/wakeup-cycle";
 import { upsertParam } from "@/lib/db/queries/params";
 import { STRATEGY_VERSION } from "@/lib/strategy/constants";
 import { log } from "@/lib/logger";
@@ -228,19 +230,12 @@ function buildSchedulerHandlers(): SchedulerHandlers {
           break;
         case "sonnet_check_06":
         case "sonnet_check_22":
-          // Sonnet checkpoint orchestration: assemble slim package +
-          // call Sonnet via runSonnetCheck. Lands in the next iteration —
-          // for now log, and the operator can force a check via cmd+K.
-          log.info(`Scheduler — Sonnet checkpoint ${event} pending orchestration wiring`);
+          await runScheduledSonnetCheckpoint();
           break;
       }
     },
     runWakeupChecks: async () => {
-      // Wake-up trigger evaluation: hits the price-poll loop, evaluates the
-      // 3 hardcoded triggers (position move >5%/4h, stop fill, news keyword),
-      // dispatches via the wakeup dispatcher → Sonnet. The price snapshot
-      // writer also fires here so each 5-min poll captures market state.
-      // Full wiring lands in the next iteration.
+      await runWakeupCycle();
     },
   };
 }

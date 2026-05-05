@@ -306,6 +306,26 @@ export class LiveExecutor implements OrderExecutor {
     };
   }
 
+  /**
+   * Live executor no-op. Coinbase fills happen server-side; reconciliation
+   * (boot + force-reconcile) discovers them via getOrderStatus.
+   */
+  async processPendingFills(
+    _currentPrices: Record<string, number>,
+  ): Promise<
+    Array<{
+      orderId: string;
+      coinbaseOrderId: string;
+      fillPrice: number;
+      quantity: number;
+      asset: string;
+      type: string;
+    }>
+  > {
+    void _currentPrices;
+    return [];
+  }
+
   private mapStatus(s: string): OrderStatus["status"] {
     switch (s) {
       case "FILLED":

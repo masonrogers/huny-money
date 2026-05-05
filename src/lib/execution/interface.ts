@@ -99,4 +99,25 @@ export interface OrderExecutor {
   cancelOrder(coinbaseOrderId: string): Promise<void>;
 
   getOrderStatus(coinbaseOrderId: string): Promise<OrderStatus>;
+
+  /**
+   * Called by the price-polling loop on each 5-min tick.
+   *
+   * Paper executor: scans pending stop-limit / take-profit / market_exit
+   * orders and fills them against the supplied prices, returning the list
+   * of fills that landed this cycle.
+   *
+   * Live executor: no-op. Real Coinbase fills happen server-side and are
+   * discovered by reconciliation against `getOrderStatus`.
+   */
+  processPendingFills(currentPrices: Record<string, number>): Promise<
+    Array<{
+      orderId: string;
+      coinbaseOrderId: string;
+      fillPrice: number;
+      quantity: number;
+      asset: string;
+      type: string;
+    }>
+  >;
 }
