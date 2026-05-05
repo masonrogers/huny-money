@@ -1,19 +1,30 @@
 import { NextResponse } from "next/server";
+import { runScheduledMorningBrief } from "@/lib/orchestration/morning-brief";
+import { errorLogger } from "@/lib/db/utils";
 
 /**
- * Stub for the "force morning brief now" control. Phase 9 wires this up to
- * the actual morning-brief flow (assemble package → call Opus → persist).
- *
- * For Phase 7 we accept the request, log intent, and return 501 so the UI
- * can render the button with a clear "not yet wired" state.
+ * Force-brief endpoint. Runs the full morning-brief orchestration
+ * immediately. Counts against the monthly API budget — the dashboard
+ * warns the operator if the cap would be exceeded.
  */
 export async function POST() {
-  return NextResponse.json(
-    {
-      ok: false,
-      message:
-        "Force brief is not yet wired to the morning-brief flow. Available in Phase 9 after DB integration tests confirm the end-to-end path.",
-    },
-    { status: 501 },
-  );
+  try {
+    const result = await runScheduledMorningBrief();
+    if (!result.ok) {
+      return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
+    }
+    return NextResponse.json({
+      ok: true,
+      message: `Morning brief complete · regime=${result.brief.regime} · $${result.costUsd.toFixed(4)}`,
+      evaluationId: result.evaluationId,
+    });
+  } catch (err) {
+    await errorLogger({
+      severity: "error",
+      component: "api.controls.force-brief",
+      error: err instanceof Error ? err : new Error(String(err)),
+      recovered: false,
+    }).catch(() => {});
+    return NextResponse.json({ ok: false, error: (err as Error).message }, { status: 500 });
+  }
 }

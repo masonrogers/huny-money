@@ -13,8 +13,13 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["test/**/*.test.ts"],
-    // DB integration tests opt in via env flag — they require a clean schema
-    // pushed to the configured DATABASE_URL.
+    // DB integration tests live under test/integration/ and skip themselves
+    // unless RUN_INTEGRATION=1 is set. They require a clean schema pushed
+    // to the configured DATABASE_URL.
     setupFiles: ["test/setup.ts"],
+    testTimeout: 30_000,
+    // Integration tests share DB state — opt them into a single fork so
+    // they don't race. Pure tests run with the default pool concurrency.
+    fileParallelism: !process.env.RUN_INTEGRATION,
   },
 });
