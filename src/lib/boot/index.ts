@@ -183,7 +183,7 @@ async function initializeFirstLaunch(): Promise<number> {
   });
   await stateWriter({
     key: "current_regime",
-    value: null, // first morning brief sets it
+    value: null, // first morning brief sets it; null = "not yet classified"
     changedBy: "boot.first-launch",
   });
   await stateWriter({

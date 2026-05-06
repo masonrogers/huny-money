@@ -86,7 +86,10 @@ export const urgencyEnum = pgEnum("urgency", ["immediate", "next_check"]);
 
 export const state = pgTable("state", {
   key: text("key").primaryKey(),
-  value: jsonb("value").notNull(),
+  // Nullable so keys can legitimately transition to null (e.g.,
+  // cooldown_until clears when the window expires, current_regime is
+  // unset until the first morning brief, etc.).
+  value: jsonb("value"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -319,7 +322,9 @@ export const systemStateHistory = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     key: text("key").notNull(),
     oldValue: jsonb("old_value"),
-    newValue: jsonb("new_value").notNull(),
+    // Nullable to mirror state.value — a transition from "set" to "unset"
+    // is a real audit-worthy event (cooldown expired, regime cleared).
+    newValue: jsonb("new_value"),
     changedAt: timestamp("changed_at", { withTimezone: true }).notNull().defaultNow(),
     changedBy: text("changed_by").notNull(),
     relatedEvalId: uuid("related_eval_id").references(() => evaluations.id),
