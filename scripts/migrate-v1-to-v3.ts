@@ -54,18 +54,35 @@ async function main() {
     `;
     const existing = new Set(rows.map((r) => r.tablename));
     const v1Detected = V1_TABLES.some((t) => existing.has(t));
+    // Sentinel: a state row written only by v3 migrations after the schema is
+    // known-good. Once present, this script trusts drizzle-kit to handle
+    // diffs from there. Until present, we eagerly drop because (a) there's
+    // no real data yet, and (b) drizzle-kit's diff misbehaves on the
+    // NOT NULL → NULL transition for jsonb columns.
+    const sentinel = await sql<{ value: unknown }[]>`
+      SELECT value FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'state' LIMIT 1
+    `.catch(() => []);
 
-    if (!v1Detected) {
+    const v3SchemaSettled = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'state' AND column_name = 'value' AND is_nullable = 'YES'
+    `.catch(() => [{ count: 0 }]);
+
+    const isV3WithCorrectSchema =
+      sentinel.length > 0 && v3SchemaSettled[0]!.count === 1;
+
+    if (!v1Detected && isV3WithCorrectSchema) {
       console.log(
-        `[migrate-v1-to-v3] No v1 tables detected (current: ${rows.length} tables). Skipping schema drop — drizzle-kit will handle the diff.`,
+        `[migrate-v1-to-v3] v3 schema is settled (${rows.length} tables, state.value is nullable). Skipping drop.`,
       );
       return;
     }
 
     console.log(
-      `[migrate-v1-to-v3] v1 tables detected — dropping public schema and recreating clean.`,
+      `[migrate-v1-to-v3] Schema needs reset (v1 detected: ${v1Detected}, v3 settled: ${isV3WithCorrectSchema}). Dropping public schema.`,
     );
-    console.log(`  current tables: ${Array.from(existing).join(", ")}`);
+    console.log(`  current tables: ${Array.from(existing).join(", ") || "(none)"}`);
 
     await sql.unsafe("DROP SCHEMA public CASCADE");
     await sql.unsafe("CREATE SCHEMA public");
