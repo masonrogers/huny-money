@@ -102,7 +102,7 @@ export async function callClaude(input: ClaudeCallInput): Promise<ClaudeCallResu
     },
   ];
 
-  const requestBody: Anthropic.Messages.MessageCreateParamsNonStreaming = {
+  const requestBody: Anthropic.Messages.MessageStreamParams = {
     model: input.model,
     max_tokens: input.maxTokens,
     system: systemBlocks,
@@ -119,9 +119,14 @@ export async function callClaude(input: ClaudeCallInput): Promise<ClaudeCallResu
     requestBody.tools = input.tools;
   }
 
+  // Use streaming for ALL Anthropic calls — the SDK rejects non-streaming
+  // create() for any request that *could* exceed 10 minutes. Opus with
+  // extended thinking trips this even on short prompts. Streaming has the
+  // same final message shape; we just await `finalMessage()` to collect it.
   let message: Anthropic.Messages.Message;
   try {
-    message = await sdk().messages.create(requestBody);
+    const stream = sdk().messages.stream(requestBody);
+    message = await stream.finalMessage();
   } catch (err) {
     const e = err instanceof Error ? err : new Error(String(err));
     await errorLogger({

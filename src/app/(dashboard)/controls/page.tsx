@@ -31,11 +31,12 @@ export default function ControlsPage() {
     setBusy("brief");
     try {
       const res = await fetch("/api/controls/force-brief", { method: "POST" });
-      const body = await res.json();
+      const body = await res.json().catch(() => ({}));
       if (res.ok) {
         toast.success(body.message ?? "Forced brief");
       } else {
-        toast.warning(body.message ?? "Force-brief stub returned 501");
+        const detail = body.error ?? body.message ?? `HTTP ${res.status}`;
+        toast.error(`Force-brief failed: ${detail}`, { duration: 8_000 });
       }
     } catch (err) {
       toast.error((err as Error).message);

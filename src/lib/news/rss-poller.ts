@@ -26,8 +26,9 @@ export interface NewsItem {
 const parser = new Parser({
   timeout: 15_000,
   headers: {
+    // ASCII-only — em-dashes / smart quotes break the underlying http client.
     "User-Agent":
-      "huny-money/2.0 (+https://github.com/masonrogers/huny-money) — RSS poller for trading bot",
+      "huny-money/3.0 (+https://github.com/masonrogers/huny-money) RSS poller",
   },
 });
 
