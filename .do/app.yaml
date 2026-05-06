@@ -6,9 +6,11 @@ services:
       repo_clone_url: https://github.com/masonrogers/huny-money.git
       branch: main
     build_command: npm run build
-    # drizzle-kit push --force creates the v3 schema on every deploy.
-    # Idempotent — only changes when the schema actually differs.
-    run_command: npx drizzle-kit push --force && npm start
+    # On the v1→v3 transition (one-shot) the migrate script detects v1 tables
+    # and drops the public schema. On subsequent deploys (v3 already in
+    # place), the script no-ops. drizzle-kit push --force then creates or
+    # updates the schema. Idempotent across deploys.
+    run_command: npx tsx scripts/migrate-v1-to-v3.ts && npx drizzle-kit push --force && npm start
     environment_slug: node-js
     instance_count: 1
     instance_size_slug: basic-xxs
