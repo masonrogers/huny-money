@@ -38,6 +38,8 @@ export type TriggerSource =
   | "wakeup_news"
   | "escalation";
 
+export type EffortTier = "low" | "medium" | "high" | "max";
+
 export interface ClaudeCallInput {
   model: ModelId;
   callType: CallType;
@@ -46,9 +48,12 @@ export interface ClaudeCallInput {
   systemPrompt: string;
   /** Dynamic per-call user message. Not cached. */
   userMessage: string;
-  /** Enable extended thinking with the given token budget. Opus only. */
-  thinking?: { budgetTokens: number };
-  /** Max output tokens (must cover thinking + response when thinking is enabled). */
+  /**
+   * Effort tier for adaptive thinking on Opus 4.7+. Sonnet ignores this
+   * (effort is set to "low" / no thinking automatically).
+   */
+  effort?: EffortTier;
+  /** Max output tokens. Must cover the response. */
   maxTokens: number;
   /** Optional Anthropic tools (e.g., web search). */
   tools?: Anthropic.Messages.ToolUnion[];
@@ -109,12 +114,17 @@ export async function callClaude(input: ClaudeCallInput): Promise<ClaudeCallResu
     messages: [{ role: "user", content: input.userMessage }],
   };
 
-  if (input.thinking) {
-    requestBody.thinking = {
-      type: "enabled",
-      budget_tokens: input.thinking.budgetTokens,
+  // Opus 4.7+ uses adaptive thinking + output_config.effort. The legacy
+  // {type: 'enabled', budget_tokens: N} shape is rejected for newer models.
+  if (input.effort) {
+    (requestBody as unknown as Record<string, unknown>).thinking = {
+      type: "adaptive",
+    };
+    (requestBody as unknown as Record<string, unknown>).output_config = {
+      effort: input.effort,
     };
   }
+
   if (input.tools && input.tools.length > 0) {
     requestBody.tools = input.tools;
   }
@@ -238,17 +248,17 @@ export async function callClaude(input: ClaudeCallInput): Promise<ClaudeCallResu
 }
 
 // ---------------------------------------------------------------------------
-// Convenience wrappers — pick model + thinking budget by call type
+// Convenience wrappers — pick model + effort tier + max_tokens by call type
 // ---------------------------------------------------------------------------
 
-const OPUS_THINKING_BY_CALL_TYPE: Partial<
-  Record<CallType, { budgetTokens: number; maxTokens: number }>
+const OPUS_EFFORT_BY_CALL_TYPE: Partial<
+  Record<CallType, { effort: EffortTier; maxTokens: number }>
 > = {
-  morning: { budgetTokens: 16_000, maxTokens: 25_000 },
-  review: { budgetTokens: 16_000, maxTokens: 25_000 },
-  opus_escalation: { budgetTokens: 6_000, maxTokens: 12_000 },
-  emergency: { budgetTokens: 6_000, maxTokens: 12_000 },
-  post_restart: { budgetTokens: 6_000, maxTokens: 12_000 },
+  morning: { effort: "max", maxTokens: 16_000 },
+  review: { effort: "max", maxTokens: 16_000 },
+  opus_escalation: { effort: "medium", maxTokens: 8_000 },
+  emergency: { effort: "medium", maxTokens: 8_000 },
+  post_restart: { effort: "medium", maxTokens: 8_000 },
 };
 
 export interface OpusCallShortInput {
@@ -262,9 +272,9 @@ export interface OpusCallShortInput {
 }
 
 export async function callOpus(input: OpusCallShortInput): Promise<ClaudeCallResult> {
-  const t = OPUS_THINKING_BY_CALL_TYPE[input.callType] ?? {
-    budgetTokens: 6_000,
-    maxTokens: 12_000,
+  const t = OPUS_EFFORT_BY_CALL_TYPE[input.callType] ?? {
+    effort: "medium" as EffortTier,
+    maxTokens: 8_000,
   };
   return callClaude({
     model: MODELS.OPUS,
@@ -272,7 +282,7 @@ export async function callOpus(input: OpusCallShortInput): Promise<ClaudeCallRes
     triggerSource: input.triggerSource,
     systemPrompt: input.systemPrompt,
     userMessage: input.userMessage,
-    thinking: { budgetTokens: t.budgetTokens },
+    effort: t.effort,
     maxTokens: t.maxTokens,
     tools: input.tools,
     strategyVersion: input.strategyVersion,

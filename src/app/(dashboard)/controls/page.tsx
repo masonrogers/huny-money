@@ -5,20 +5,28 @@ import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PageHeader } from "@/components/page-header";
 import { useApi, apiPost } from "@/lib/hooks/api";
-import { Bot, Loader2, Pause, Play, RefreshCw } from "lucide-react";
+import { Bitcoin, Bot, Loader2, Pause, Play, RefreshCw, Repeat, X } from "lucide-react";
 import type { DashboardStatusPayload } from "@/app/api/dashboard/status/route";
 
 export default function ControlsPage() {
   const { data, mutate } = useApi<DashboardStatusPayload>("/api/dashboard/status");
   const [busy, setBusy] = useState<string | null>(null);
+  const [closeAllOpen, setCloseAllOpen] = useState(false);
+  const [convertOpen, setConvertOpen] = useState(false);
+  const [toggleOpen, setToggleOpen] = useState(false);
 
-  async function pauseTrading(paused: boolean) {
-    setBusy(paused ? "pause" : "resume");
+  const paused = data?.paused ?? false;
+  const mode = data?.mode ?? "paper";
+  const target: "paper" | "live" = mode === "paper" ? "live" : "paper";
+
+  async function pauseTrading(p: boolean) {
+    setBusy(p ? "pause" : "resume");
     try {
-      await apiPost("/api/controls/pause", { paused });
-      toast.success(paused ? "Trading paused" : "Trading resumed");
+      await apiPost("/api/controls/pause", { paused: p });
+      toast.success(p ? "Trading paused" : "Trading resumed");
       await mutate();
     } catch (err) {
       toast.error((err as Error).message);
@@ -27,16 +35,25 @@ export default function ControlsPage() {
     }
   }
 
-  async function forceBrief() {
-    setBusy("brief");
+  async function postControl(
+    label: string,
+    url: string,
+    body?: unknown,
+  ): Promise<void> {
+    setBusy(label);
     try {
-      const res = await fetch("/api/controls/force-brief", { method: "POST" });
-      const body = await res.json().catch(() => ({}));
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      const json = await res.json().catch(() => ({}));
       if (res.ok) {
-        toast.success(body.message ?? "Forced brief");
+        toast.success(json.message ?? `${label} succeeded`);
+        await mutate();
       } else {
-        const detail = body.error ?? body.message ?? `HTTP ${res.status}`;
-        toast.error(`Force-brief failed: ${detail}`, { duration: 8_000 });
+        const detail = json.error ?? json.message ?? `HTTP ${res.status}`;
+        toast.error(`${label} failed: ${detail}`, { duration: 8_000 });
       }
     } catch (err) {
       toast.error((err as Error).message);
@@ -44,8 +61,6 @@ export default function ControlsPage() {
       setBusy(null);
     }
   }
-
-  const paused = data?.paused ?? false;
 
   return (
     <div className="space-y-6 max-w-[1400px]">
@@ -78,11 +93,7 @@ export default function ControlsPage() {
                 onClick={() => pauseTrading(true)}
                 disabled={paused || busy != null}
               >
-                {busy === "pause" ? (
-                  <Loader2 className="animate-spin" />
-                ) : (
-                  <Pause />
-                )}
+                {busy === "pause" ? <Loader2 className="animate-spin" /> : <Pause />}
                 Pause
               </Button>
               <Button
@@ -106,14 +117,13 @@ export default function ControlsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button onClick={forceBrief} disabled={busy != null}>
-              {busy === "brief" ? <Loader2 className="animate-spin" /> : <Bot />}
+            <Button
+              onClick={() => postControl("Force brief", "/api/controls/force-brief")}
+              disabled={busy != null}
+            >
+              {busy === "Force brief" ? <Loader2 className="animate-spin" /> : <Bot />}
               Force brief now
             </Button>
-            <p className="text-xs text-[var(--color-text-faint)] mt-3">
-              Wired in Phase 9 — currently returns a 501 to acknowledge intent. Use the manual
-              cron trigger via API in the meantime.
-            </p>
           </CardContent>
         </Card>
 
@@ -122,16 +132,18 @@ export default function ControlsPage() {
             <CardTitle>Force reconciliation</CardTitle>
             <CardDescription>
               Re-runs the boot reconciliation sequence without a restart. Verifies all open
-              positions have active stops on the exchange, reconciles order status, detects 5%+
-              price moves.
+              positions have active stops on the exchange, reconciles order status, detects
+              5%+ price moves during downtime.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button disabled>
-              <RefreshCw />
+            <Button
+              onClick={() => postControl("Force reconcile", "/api/controls/force-reconcile")}
+              disabled={busy != null}
+            >
+              {busy === "Force reconcile" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
               Force reconcile
             </Button>
-            <p className="text-xs text-[var(--color-text-faint)] mt-3">Wired in Phase 9.</p>
           </CardContent>
         </Card>
 
@@ -139,18 +151,20 @@ export default function ControlsPage() {
           <CardHeader>
             <CardTitle>Mode toggle</CardTitle>
             <CardDescription>
-              Switch between paper and live trading. Requires typed-phrase confirmation. Takes
-              effect on next boot — the executor object is the mode and must be reloaded.
+              Switch between paper and live trading. Requires typed-phrase confirmation +
+              zero open positions in either mode + Phase 1 criteria pass (for paper→live).
+              Takes effect on next boot — the executor object IS the mode and must be reloaded.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button variant="outline" disabled>
-              Toggle mode…
+            <Button
+              variant="outline"
+              onClick={() => setToggleOpen(true)}
+              disabled={busy != null}
+            >
+              <Repeat />
+              Toggle to {target}…
             </Button>
-            <p className="text-xs text-[var(--color-text-faint)] mt-3">
-              Confirmation modal lands in Phase 8 polish. Endpoint at /api/controls/toggle-mode
-              already enforces all §13.5 preconditions.
-            </p>
           </CardContent>
         </Card>
 
@@ -158,15 +172,19 @@ export default function ControlsPage() {
           <CardHeader>
             <CardTitle>Close all positions</CardTitle>
             <CardDescription>
-              Market-exit all open positions. Cancels all open orders. Double-confirmation
+              Market-exit every open position for the current mode. Double-confirmation
               required. Use only as a kill switch.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button variant="danger" disabled>
-              Close all (double-confirm)
+            <Button
+              variant="danger"
+              onClick={() => setCloseAllOpen(true)}
+              disabled={busy != null}
+            >
+              <X />
+              Close all…
             </Button>
-            <p className="text-xs text-[var(--color-text-faint)] mt-3">Wired in Phase 9.</p>
           </CardContent>
         </Card>
 
@@ -175,18 +193,79 @@ export default function ControlsPage() {
             <CardTitle>Convert to BTC core hold</CardTitle>
             <CardDescription>
               Closes all positions, buys BTC with all available USDC, halts active trading.
-              Irreversible. Used as the §4.4 honesty-check fallback when 60-day BTC
-              underperformance fires.
+              Irreversible. The §4.4 honesty-check fallback when 60-day BTC underperformance
+              fires.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button variant="outline" disabled>
-              Convert to BTC core hold
+            <Button
+              variant="outline"
+              onClick={() => setConvertOpen(true)}
+              disabled={busy != null}
+            >
+              <Bitcoin />
+              Convert to BTC core hold…
             </Button>
-            <p className="text-xs text-[var(--color-text-faint)] mt-3">Wired in Phase 9.</p>
           </CardContent>
         </Card>
       </div>
+
+      <ConfirmDialog
+        open={closeAllOpen}
+        onOpenChange={setCloseAllOpen}
+        title="Close all open positions?"
+        description="This market-exits every open position for the current mode. Existing limit/stop orders are cancelled. Cannot be undone."
+        tone="danger"
+        doubleConfirm
+        confirmLabel="Close all positions"
+        onConfirm={async (payload) =>
+          postControl("Close all", "/api/controls/close-all", payload)
+        }
+      />
+
+      <ConfirmDialog
+        open={convertOpen}
+        onOpenChange={setConvertOpen}
+        title="Convert to BTC core hold?"
+        description={
+          <>
+            <strong>This is the strategy kill switch.</strong> All positions close, all
+            USDC swaps for BTC, and trading halts. Used when the bot has failed the
+            60-day BTC benchmark gate. Reversing this requires manual database
+            intervention AND a restart.
+          </>
+        }
+        tone="warning"
+        doubleConfirm
+        typedPhrase="convert to btc core hold"
+        confirmLabel="Halt and convert"
+        onConfirm={async (payload) =>
+          postControl("Convert to BTC core hold", "/api/controls/convert-to-btc-hold", payload)
+        }
+      />
+
+      <ConfirmDialog
+        open={toggleOpen}
+        onOpenChange={setToggleOpen}
+        title={`Switch from ${mode} to ${target} mode?`}
+        description={
+          <>
+            The mode flip is rejected if there are open positions in either mode, pending
+            orders, or (for paper→live) Phase 1 advance criteria are not yet met. The change
+            takes effect on the <strong>next boot</strong> — the running executor is the
+            previous mode until then.
+          </>
+        }
+        tone="warning"
+        typedPhrase={`transition to ${target} trading`}
+        confirmLabel={`Schedule transition to ${target}`}
+        onConfirm={async (payload) =>
+          postControl("Toggle mode", "/api/controls/toggle-mode", {
+            target,
+            typedPhrase: payload.typedPhrase,
+          })
+        }
+      />
     </div>
   );
 }
