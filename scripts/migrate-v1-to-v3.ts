@@ -54,23 +54,21 @@ async function main() {
     `;
     const existing = new Set(rows.map((r) => r.tablename));
     const v1Detected = V1_TABLES.some((t) => existing.has(t));
-    // Sentinel: a state row written only by v3 migrations after the schema is
-    // known-good. Once present, this script trusts drizzle-kit to handle
-    // diffs from there. Until present, we eagerly drop because (a) there's
-    // no real data yet, and (b) drizzle-kit's diff misbehaves on the
-    // NOT NULL → NULL transition for jsonb columns.
-    const sentinel = await sql<{ value: unknown }[]>`
-      SELECT value FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name = 'state' LIMIT 1
-    `.catch(() => []);
 
+    // v3-settled signal: state.value column is nullable. That NOT NULL → NULL
+    // transition is the one drizzle-kit's diff couldn't apply automatically
+    // (jsonb dropping NOT NULL). Once we see the column as nullable, the
+    // schema is current shape and drizzle-kit can handle further diffs
+    // without a wipe. The previous sentinel query selected `value` from
+    // information_schema.tables — that column doesn't exist, the query
+    // always threw, .catch returned [], so isV3WithCorrectSchema was always
+    // false → schema was dropped on every deploy, wiping all state.
     const v3SchemaSettled = await sql<{ count: number }[]>`
       SELECT COUNT(*)::int AS count FROM information_schema.columns
       WHERE table_schema = 'public' AND table_name = 'state' AND column_name = 'value' AND is_nullable = 'YES'
     `.catch(() => [{ count: 0 }]);
 
-    const isV3WithCorrectSchema =
-      sentinel.length > 0 && v3SchemaSettled[0]!.count === 1;
+    const isV3WithCorrectSchema = v3SchemaSettled[0]!.count === 1;
 
     if (!v1Detected && isV3WithCorrectSchema) {
       console.log(
