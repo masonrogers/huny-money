@@ -120,4 +120,14 @@ export interface OrderExecutor {
       type: string;
     }>
   >;
+
+  /**
+   * Cash balance available to the bot, in USD.
+   *
+   * Live: USD + USDC balances from Coinbase (the bot treats both as cash).
+   * Paper: starting_capital_paper_usd + Σ(filled SELL value − fees)
+   *        − Σ(filled BUY value + fees). Computed from the orders table so
+   *        the equity curve always reconciles with the audit trail.
+   */
+  getCashBalanceUsd(): Promise<number>;
 }

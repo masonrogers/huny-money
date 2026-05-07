@@ -3,9 +3,10 @@ import {
   insertOrder,
   pendingOrdersForCurrentMode,
   orderByCoinbaseIdForCurrentMode,
+  paperCashFlowsFromDb,
   updateOrder,
 } from "@/lib/db/queries/orders";
-import { errorLogger } from "@/lib/db/utils";
+import { errorLogger, stateRead } from "@/lib/db/utils";
 import { log } from "@/lib/logger";
 import { validateOrder } from "./validation";
 import type { OrderExecutor, OrderResult, OrderStatus, PlaceOptions } from "./interface";
@@ -286,6 +287,17 @@ export class PaperExecutor implements OrderExecutor {
     }
 
     return fills;
+  }
+
+  // ---------------------------------------------------------------------
+  // Cash balance — derived from filled-order cash flows + starting capital.
+  // ---------------------------------------------------------------------
+
+  async getCashBalanceUsd(): Promise<number> {
+    const startingCapital =
+      (await stateRead<number>("starting_capital_paper_usd")) ?? 0;
+    const { outflow, inflow } = await paperCashFlowsFromDb();
+    return startingCapital + inflow - outflow;
   }
 
   // ---------------------------------------------------------------------

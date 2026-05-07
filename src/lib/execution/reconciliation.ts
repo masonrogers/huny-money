@@ -3,7 +3,10 @@ import {
   openPositionsAllModes,
   openPositionsForCurrentMode,
 } from "@/lib/db/queries/positions";
-import { pendingOrdersForCurrentMode } from "@/lib/db/queries/orders";
+import {
+  pendingOrdersForCurrentMode,
+  updateOrder,
+} from "@/lib/db/queries/orders";
 import { getCurrentMode, type Mode } from "@/lib/mode";
 import { log } from "@/lib/logger";
 import type { OrderExecutor } from "./interface";
@@ -120,9 +123,14 @@ export async function runBootReconciliation(
       try {
         const status = await deps.executor.getOrderStatus(o.coinbaseOrderId);
         if (status.status !== "pending") {
-          // Update is handled by the orders query helpers — but we don't
-          // import them directly here to keep the surface focused. Instead
-          // we delegate to the executor (which writes via insertOrder/updateOrder).
+          await updateOrder(o.id, {
+            status: status.status,
+            fillPrice: status.fillPrice != null ? status.fillPrice.toString() : null,
+            fillQuantity: status.fillQuantity != null ? status.fillQuantity.toString() : null,
+            filledAt: status.filledAt ?? null,
+            cancelReason:
+              status.status === "cancelled" ? "reconciliation.sync" : null,
+          });
           findings.ordersUpdated++;
           log.info("Reconciliation: order status updated", {
             coinbaseOrderId: o.coinbaseOrderId,

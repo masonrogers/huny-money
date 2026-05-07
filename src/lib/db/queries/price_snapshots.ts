@@ -29,6 +29,16 @@ export async function snapshotAt(at: Date): Promise<PriceSnapshotRow | null> {
   return rows[0] ?? null;
 }
 
+/** The most recent snapshot. Returns null if the table is empty. */
+export async function mostRecentSnapshot(): Promise<PriceSnapshotRow | null> {
+  const rows = await db
+    .select()
+    .from(priceSnapshots)
+    .orderBy(desc(priceSnapshots.timestamp))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function snapshotsByEventSince(
   triggerEvent: PriceSnapshotRow["triggerEvent"],
   since: Date,

@@ -4,6 +4,7 @@ import { openPositionsAllModes } from "@/lib/db/queries/positions";
 import { recentEvaluations } from "@/lib/db/queries/evaluations";
 import { recentWakeups } from "@/lib/db/queries/wakeups";
 import { recentErrors } from "@/lib/db/queries/errors";
+import { mostRecentSnapshot } from "@/lib/db/queries/price_snapshots";
 import { MONTHLY_BUDGET_USD } from "@/lib/anthropic";
 import { safeDashboardHandler } from "@/lib/api/safe-handler";
 
@@ -51,27 +52,59 @@ export async function GET() {
       const mode: "paper" | "live" = paperMode ? "paper" : "live";
       const suffix = mode === "paper" ? "paper" : "live";
 
-      const [startingCapital, peakValueUsd, mtd, allOpen, evals, wakeups, errors] =
-        await Promise.all([
-          stateRead<number>(`starting_capital_${suffix}_usd`),
-          stateRead<number>(`peak_value_${suffix}_usd`),
-          monthlySpendUsd(monthKey()),
-          openPositionsAllModes(),
-          recentEvaluations(10),
-          recentWakeups(10),
-          recentErrors(10),
-        ]);
+      const [
+        startingCapital,
+        peakValueUsd,
+        lastEquity,
+        lastCash,
+        btcAtStart,
+        mtd,
+        allOpen,
+        evals,
+        wakeups,
+        errors,
+        latestSnap,
+      ] = await Promise.all([
+        stateRead<number>(`starting_capital_${suffix}_usd`),
+        stateRead<number>(`peak_value_${suffix}_usd`),
+        stateRead<number>(`last_equity_${suffix}_usd`),
+        stateRead<number>(`last_cash_${suffix}_usd`),
+        stateRead<number>(`btc_price_at_start_${suffix}`),
+        monthlySpendUsd(monthKey()),
+        openPositionsAllModes(),
+        recentEvaluations(10),
+        recentWakeups(10),
+        recentErrors(10),
+        mostRecentSnapshot(),
+      ]);
 
-      // For now we don't compute total mark-to-market — Phase 5's price loop
-      // will write equity snapshots; until then, total ≈ starting capital
-      // when no positions are open.
       const openInMode = allOpen.filter((p) => p.paperMode === paperMode);
-      const cashUsd = startingCapital ?? null;
-      const totalValueUsd = startingCapital ?? null;
+      // Prefer the equity snapshotter's mark-to-market value; fall back to
+      // starting capital pre-first-tick.
+      const totalValueUsd =
+        lastEquity != null
+          ? lastEquity
+          : startingCapital != null
+            ? startingCapital
+            : null;
+      const cashUsd = lastCash != null ? lastCash : startingCapital;
 
       const systemReturnPct =
         startingCapital != null && totalValueUsd != null && startingCapital > 0
           ? ((totalValueUsd - startingCapital) / startingCapital) * 100
+          : null;
+
+      // BTC outperformance: how much the bot's equity grew vs. holding the
+      // entire starting capital in BTC over the same window. Positive ≡ ahead
+      // of buy-and-hold; this is the benchmark the bot exists to beat.
+      const currentBtc = latestSnap?.btcPrice != null ? Number(latestSnap.btcPrice) : null;
+      const btcReturnPct =
+        btcAtStart != null && currentBtc != null && btcAtStart > 0
+          ? ((currentBtc - btcAtStart) / btcAtStart) * 100
+          : null;
+      const btcOutperformancePct =
+        systemReturnPct != null && btcReturnPct != null
+          ? systemReturnPct - btcReturnPct
           : null;
 
       const drawdownFromPeakPct =
@@ -109,7 +142,7 @@ export async function GET() {
         startingCapitalUsd: startingCapital,
         cashUsd,
         systemReturnPct,
-        btcOutperformancePct: null, // computed in Phase 7.7 once equity snapshots are written
+        btcOutperformancePct,
         drawdownFromPeakPct,
         apiSpend: {
           mtd,

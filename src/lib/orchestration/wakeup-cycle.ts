@@ -14,6 +14,7 @@ import { type SonnetCheckInput } from "@/lib/ai/packages/sonnet-watcher";
 import type { MorningBrief } from "@/lib/ai/schemas";
 import { pollAllFeeds } from "@/lib/news";
 import { CORE_ASSETS, productIdFor } from "@/lib/strategy/constants";
+import { persistEquitySnapshot } from "@/lib/orchestration/equity-snapshotter";
 import { log } from "@/lib/logger";
 
 /**
@@ -38,6 +39,7 @@ import { log } from "@/lib/logger";
 
 export interface WakeupCycleResult {
   pricesWritten: boolean;
+  equitySnapshotWritten: boolean;
   paperFills: number;
   positionMoveFires: number;
   stopFillFires: number;
@@ -48,6 +50,7 @@ export interface WakeupCycleResult {
 export async function runWakeupCycle(): Promise<WakeupCycleResult> {
   const result: WakeupCycleResult = {
     pricesWritten: false,
+    equitySnapshotWritten: false,
     paperFills: 0,
     positionMoveFires: 0,
     stopFillFires: 0,
@@ -83,6 +86,11 @@ export async function runWakeupCycle(): Promise<WakeupCycleResult> {
     const executor = getExecutor();
     const fills = await executor.processPendingFills(prices);
     result.paperFills = fills.length;
+
+    // 3a. Persist equity snapshot AFTER fills processed so the recorded
+    //     equity reflects this tick's settlements rather than last tick's.
+    const equitySnap = await persistEquitySnapshot(prices);
+    result.equitySnapshotWritten = equitySnap != null;
 
     // 4. Update position states for fills
     for (const fill of fills) {

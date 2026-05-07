@@ -28,6 +28,37 @@ export interface PerformancePayload {
   dbReady: boolean;
 }
 
+/**
+ * Buckets a list of R-multiples into a fixed histogram.
+ * Buckets: <-3R, -3 to -2, -2 to -1, -1 to 0, 0 to 1, 1 to 2, 2 to 3, >3R.
+ */
+export function bucketRMultiples(rs: readonly number[]): Array<{ bucket: string; count: number }> {
+  const labels = [
+    "<-3R",
+    "-3 to -2R",
+    "-2 to -1R",
+    "-1 to 0R",
+    "0 to 1R",
+    "1 to 2R",
+    "2 to 3R",
+    ">3R",
+  ];
+  const counts = labels.map(() => 0);
+  for (const r of rs) {
+    let i: number;
+    if (r < -3) i = 0;
+    else if (r < -2) i = 1;
+    else if (r < -1) i = 2;
+    else if (r < 0) i = 3;
+    else if (r < 1) i = 4;
+    else if (r < 2) i = 5;
+    else if (r < 3) i = 6;
+    else i = 7;
+    counts[i]!++;
+  }
+  return labels.map((bucket, i) => ({ bucket, count: counts[i]! }));
+}
+
 export async function GET() {
   return safeDashboardHandler<PerformancePayload>(
     "api.dashboard.performance",
@@ -60,6 +91,7 @@ export async function GET() {
       let losses = 0;
       let sumWinPct = 0;
       let sumLossPct = 0;
+      const rMultiples: number[] = [];
 
       for (const p of closed) {
         const pnl = p.netPnlUsd != null ? Number(p.netPnlUsd) : 0;
@@ -77,8 +109,17 @@ export async function GET() {
             losses++;
             sumLossPct += pct;
           }
+          // R-multiple: how many "R" units of risk did this trade earn,
+          // where 1R = the distance from entry to the original stop.
+          // Trades without a stop price at entry are skipped (no R denominator).
+          const stop = p.stopPrice != null ? Number(p.stopPrice) : null;
+          if (stop != null && stop > 0 && stop !== entry) {
+            const r = (exit - entry) / Math.abs(entry - stop);
+            if (Number.isFinite(r)) rMultiples.push(r);
+          }
         }
       }
+      const rMultipleDistribution = bucketRMultiples(rMultiples);
 
       const closedTrades = closed.slice(0, 50).map((p) => {
         const entry = Number(p.entryPrice);
@@ -117,7 +158,7 @@ export async function GET() {
         winRate,
         avgWinPct,
         avgLossPct,
-        rMultipleDistribution: [], // computed in a follow-up; needs entry stop data
+        rMultipleDistribution,
         feeDragPct,
         closedTrades,
         dbReady: true,

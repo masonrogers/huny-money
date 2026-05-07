@@ -171,6 +171,23 @@ async function initializeFirstLaunch(): Promise<number> {
     value: totalUsd,
     changedBy: "boot.first-launch",
   });
+  // Seed the equity curve at t=0 so the dashboard renders a single point on
+  // day one rather than waiting for the first 5-minute wake-up tick.
+  await stateWriter({
+    key: "last_equity_paper_usd",
+    value: totalUsd,
+    changedBy: "boot.first-launch",
+  });
+  await stateWriter({
+    key: "last_cash_paper_usd",
+    value: totalUsd,
+    changedBy: "boot.first-launch",
+  });
+  await stateWriter({
+    key: "last_positions_value_paper_usd",
+    value: 0,
+    changedBy: "boot.first-launch",
+  });
   await stateWriter({
     key: "peak_value_paper_usd",
     value: totalUsd,

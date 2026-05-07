@@ -36,6 +36,10 @@ export async function checkPositionMove(
   now: Date = new Date(),
 ): Promise<PositionMoveFire | null> {
   if (input.priceFourHoursAgo == null || input.priceFourHoursAgo <= 0) return null;
+  // Reject zero/negative current prices too — the wake-up cycle defaults
+  // missing tickers to 0 (`prices[a] ?? 0`), which would otherwise compute
+  // deltaPct = -100% and fire a spurious wake-up on Coinbase ticker hiccups.
+  if (!Number.isFinite(input.currentPrice) || input.currentPrice <= 0) return null;
 
   const deltaPct = ((input.currentPrice - input.priceFourHoursAgo) / input.priceFourHoursAgo) * 100;
   if (Math.abs(deltaPct) < POSITION_MOVE_THRESHOLD_PCT) return null;

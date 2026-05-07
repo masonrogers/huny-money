@@ -3,14 +3,19 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/page-header";
+import { EquityChart, EquityChartLegend } from "@/components/charts/equity-chart";
 import { useApi } from "@/lib/hooks/api";
 import { formatUsd, formatPct, formatRelativeTime } from "@/lib/utils/format";
 import { Activity, ArrowDownUp, Bot, Layers, TrendingUp, Wallet } from "lucide-react";
 import type { OverviewPayload } from "@/app/api/dashboard/overview/route";
+import type { EquityCurvePayload } from "@/app/api/dashboard/equity-curve/route";
 
 export default function OverviewPage() {
   const { data, isLoading } = useApi<OverviewPayload>("/api/dashboard/overview", {
     refreshInterval: 30_000,
+  });
+  const { data: curve } = useApi<EquityCurvePayload>("/api/dashboard/equity-curve?days=30", {
+    refreshInterval: 60_000,
   });
 
   return (
@@ -62,11 +67,25 @@ export default function OverviewPage() {
           <CardTitle>Equity curve · 30 days</CardTitle>
         </CardHeader>
         <CardContent>
-          <EmptyState
-            icon={<TrendingUp />}
-            title="No equity history yet"
-            description="The equity curve appears once the price-poll loop has been writing equity snapshots for at least 24 hours. The full view (Performance) will overlay a BTC buy-and-hold benchmark."
-          />
+          {!curve || curve.points.length === 0 ? (
+            <EmptyState
+              icon={<TrendingUp />}
+              title="No equity history yet"
+              description="The first equity snapshot is captured at the next 5-minute wake-up tick. The curve overlays the same dollars held in BTC for an honest comparison."
+            />
+          ) : (
+            <div className="space-y-3">
+              <EquityChart
+                points={curve.points}
+                startingCapital={curve.startingCapitalUsd}
+                height={240}
+              />
+              <EquityChartLegend
+                trend={trendOf(curve.points.map((p) => p.equity))}
+                startingCapital={curve.startingCapitalUsd}
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -173,4 +192,13 @@ function ActivityIcon({ type }: { type: "eval" | "wakeup" | "error" }) {
   if (type === "eval") return <Bot className="size-4 mt-0.5 text-[var(--color-accent)] shrink-0" />;
   if (type === "wakeup") return <ArrowDownUp className="size-4 mt-0.5 text-[var(--color-warning)] shrink-0" />;
   return <Layers className="size-4 mt-0.5 text-[var(--color-danger)] shrink-0" />;
+}
+
+function trendOf(values: number[]): "up" | "down" | "flat" {
+  if (values.length < 2) return "flat";
+  const first = values[0]!;
+  const last = values[values.length - 1]!;
+  if (last > first) return "up";
+  if (last < first) return "down";
+  return "flat";
 }

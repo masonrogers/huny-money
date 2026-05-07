@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { stateWriter, errorLogger, appDecisionLogger } from "@/lib/db/utils";
 import { getExecutor } from "@/lib/execution";
 import { openPositionsForCurrentMode, updatePosition } from "@/lib/db/queries/positions";
-import { getAllBalances, getTicker } from "@/lib/coinbase";
+import { getTicker } from "@/lib/coinbase";
 import { log } from "@/lib/logger";
 
 /**
@@ -63,16 +63,24 @@ export async function POST(request: Request) {
       }
     }
 
-    // 2. Buy BTC with all available USDC
+    // 2. Buy BTC with all available cash (mode-correct via the executor —
+    //    paper mode uses simulated paper cash, live mode uses real Coinbase
+    //    USD+USDC balances). Using getAllBalances directly would route
+    //    paper-mode conversions through real exchange balances and diverge
+    //    from the paper accounting.
     let btcBuyResult: { quantity: number; price: number } | null = null;
+    let cashAvailable = 0;
     try {
-      const balances = await getAllBalances(["USDC", "USD"]);
-      const cashAvailable = (balances.USDC?.available ?? 0) + (balances.USD?.available ?? 0);
+      cashAvailable = await executor.getCashBalanceUsd();
       const ticker = await getTicker("BTC-USD");
       if (cashAvailable > 50) {
         const btcQty = (cashAvailable / ticker.midPrice) * 0.999; // 0.1% buffer for fees
         await executor.placeDcaLimitBuy("BTC", ticker.midPrice, btcQty);
         btcBuyResult = { quantity: btcQty, price: ticker.midPrice };
+      } else {
+        log.warn("Convert-to-BTC: skipping BTC buy — cash below $50 floor", {
+          cashAvailable,
+        });
       }
     } catch (err) {
       log.error("Failed to buy BTC during core-hold conversion", {
@@ -94,10 +102,10 @@ export async function POST(request: Request) {
 
     await appDecisionLogger({
       decisionType: "circuit_breaker",
-      inputs: { trigger: "convert_to_btc_hold", openClosed: open.length },
+      inputs: { trigger: "convert_to_btc_hold", openClosed: open.length, cashAvailable },
       outputs: { btcBuyResult, phase: "halted", paused: true },
       reasoning:
-        "Operator-triggered convert to BTC core hold. All positions closed, all USDC swapped for BTC, trading halted. Irreversible without manual state intervention.",
+        "Operator-triggered convert to BTC core hold. All positions closed, available cash swapped for BTC (mode-correct), trading halted. Irreversible without manual state intervention.",
     });
 
     log.warn("CONVERT TO BTC CORE HOLD executed by operator", {

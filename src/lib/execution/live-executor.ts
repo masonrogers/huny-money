@@ -7,7 +7,12 @@ import {
   getOrder,
   type CreateOrderResponse,
 } from "@/lib/coinbase/orders";
-import { insertOrder, updateOrder } from "@/lib/db/queries/orders";
+import { getAllBalances } from "@/lib/coinbase/accounts";
+import {
+  insertOrder,
+  orderByCoinbaseIdForCurrentMode,
+  updateOrder,
+} from "@/lib/db/queries/orders";
 import { errorLogger } from "@/lib/db/utils";
 import { log } from "@/lib/logger";
 import { validateOrder } from "./validation";
@@ -198,10 +203,19 @@ export class LiveExecutor implements OrderExecutor {
       });
       return;
     }
-    // Mark our row cancelled so reconciliation doesn't keep retrying.
-    // We don't have the local `id` here — but updateOrder by coinbase_order_id
-    // would require a query; that lives in the position-state module that
-    // calls this method.
+    // Persist the cancellation in our orders table so reconciliation
+    // doesn't keep retrying and the dashboard reflects current state.
+    const row = await orderByCoinbaseIdForCurrentMode(coinbaseOrderId);
+    if (row) {
+      await updateOrder(row.id, {
+        status: "cancelled",
+        cancelReason: "live_executor.cancelOrder",
+      });
+    } else {
+      log.warn("LiveExecutor.cancelOrder: cancelled on Coinbase but no local row to mark", {
+        coinbaseOrderId,
+      });
+    }
   }
 
   async getOrderStatus(coinbaseOrderId: string): Promise<OrderStatus> {
@@ -326,6 +340,11 @@ export class LiveExecutor implements OrderExecutor {
     return [];
   }
 
+  async getCashBalanceUsd(): Promise<number> {
+    const balances = await getAllBalances(["USD", "USDC"]);
+    return (balances.USD?.total ?? 0) + (balances.USDC?.total ?? 0);
+  }
+
   private mapStatus(s: string): OrderStatus["status"] {
     switch (s) {
       case "FILLED":
@@ -344,5 +363,3 @@ export class LiveExecutor implements OrderExecutor {
   }
 }
 
-// Mark this method async-safe and document the integration point with cancellation.
-void updateOrder;

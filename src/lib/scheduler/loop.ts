@@ -35,6 +35,7 @@ const WAKEUP_TICK_MULTIPLE = 5; // 5 minutes
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 let tickCount = 0;
 let running = false;
+let tickInFlight = false;
 
 const FIRED_AT_KEY: Record<ScheduledEvent, string> = {
   opus_morning: "last_opus_morning_fired_at",
@@ -117,15 +118,28 @@ export function startScheduler(handlers: SchedulerHandlers): void {
   log.info("Scheduler started", { tickIntervalMs: TICK_INTERVAL_MS });
 
   intervalHandle = setInterval(() => {
-    void tickOnce(handlers).catch(async (err) => {
-      await errorLogger({
-        severity: "critical",
-        component: "scheduler.loop.tickOnce",
-        error: err instanceof Error ? err : new Error(String(err)),
-        recovered: true,
-        recoveryAction: "Tick failed; next tick in 60s",
+    // Skip if a previous tick is still in flight. Opus + max effort can
+    // run for several minutes; without this guard the next 60s tick reads
+    // the same `last_*_fired_at` (not yet written) and re-dispatches the
+    // same event, double-billing the API budget.
+    if (tickInFlight) {
+      log.warn("Scheduler tick skipped — previous tick still in flight");
+      return;
+    }
+    tickInFlight = true;
+    void tickOnce(handlers)
+      .catch(async (err) => {
+        await errorLogger({
+          severity: "critical",
+          component: "scheduler.loop.tickOnce",
+          error: err instanceof Error ? err : new Error(String(err)),
+          recovered: true,
+          recoveryAction: "Tick failed; next tick in 60s",
+        });
+      })
+      .finally(() => {
+        tickInFlight = false;
       });
-    });
   }, TICK_INTERVAL_MS);
 }
 
@@ -143,4 +157,5 @@ export function __resetSchedulerForTesting(): void {
   intervalHandle = null;
   running = false;
   tickCount = 0;
+  tickInFlight = false;
 }

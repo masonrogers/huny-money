@@ -3,15 +3,22 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/page-header";
+import { EquityChart, EquityChartLegend } from "@/components/charts/equity-chart";
+import { Badge } from "@/components/ui/badge";
 import { useApi } from "@/lib/hooks/api";
 import { formatUsd, formatPct } from "@/lib/utils/format";
 import { LineChart } from "lucide-react";
 import type { PerformancePayload } from "@/app/api/dashboard/performance/route";
+import type { EquityCurvePayload } from "@/app/api/dashboard/equity-curve/route";
 
 export default function PerformancePage() {
   const { data, isLoading } = useApi<PerformancePayload>("/api/dashboard/performance", {
     refreshInterval: 60_000,
   });
+  const { data: curve } = useApi<EquityCurvePayload>("/api/dashboard/equity-curve?days=60", {
+    refreshInterval: 60_000,
+  });
+  const headline = computeHeadlineOutperformance(curve);
 
   return (
     <div className="space-y-6 max-w-[1400px]">
@@ -34,15 +41,34 @@ export default function PerformancePage() {
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between gap-3">
           <CardTitle>Equity curve vs. BTC hold</CardTitle>
+          {headline && (
+            <Badge variant={headline.beating ? "success" : "warning"}>
+              {headline.beating ? "Beating BTC" : "Trailing BTC"} · {formatPct(headline.deltaPct, true)} ({headline.windowLabel})
+            </Badge>
+          )}
         </CardHeader>
         <CardContent>
-          <EmptyState
-            icon={<LineChart />}
-            title="No equity history yet"
-            description="Once the price-poll loop starts writing equity snapshots, this view becomes the headline of the dashboard. The chart will overlay BTC buy-and-hold from the bot's start, and the 'Beating BTC over 30d / 60d / all-time' headline metric will appear with a pass/fail badge."
-          />
+          {!curve || curve.points.length === 0 ? (
+            <EmptyState
+              icon={<LineChart />}
+              title="No equity history yet"
+              description="The first equity snapshot is captured at the next 5-minute wake-up tick. The dashed line overlays the same dollars held in BTC since the bot's start; the bot's job is to stay above it."
+            />
+          ) : (
+            <div className="space-y-3">
+              <EquityChart
+                points={curve.points}
+                startingCapital={curve.startingCapitalUsd}
+                height={320}
+              />
+              <EquityChartLegend
+                trend={trendOf(curve.points.map((p) => p.equity))}
+                startingCapital={curve.startingCapitalUsd}
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -83,6 +109,59 @@ export default function PerformancePage() {
           />
         </div>
       )}
+
+      {data && data.rMultipleDistribution.some((b) => b.count > 0) && (
+        <Card>
+          <CardHeader>
+            <CardTitle>R-multiple distribution</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <RMultipleHistogram buckets={data.rMultipleDistribution} />
+            <p className="mt-3 text-xs text-[var(--color-text-faint)]">
+              R = (exit − entry) / |entry − stop|. Trades that closed without an entry-time stop
+              are excluded. A healthy edge shows a positive average and a long right tail —
+              big winners pay for many small losers.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function RMultipleHistogram({
+  buckets,
+}: {
+  buckets: PerformancePayload["rMultipleDistribution"];
+}) {
+  const max = Math.max(1, ...buckets.map((b) => b.count));
+  return (
+    <div className="grid grid-cols-8 gap-2 items-end h-32">
+      {buckets.map((b) => {
+        const heightPct = (b.count / max) * 100;
+        const isLoss = b.bucket.startsWith("<") || b.bucket.startsWith("-");
+        return (
+          <div key={b.bucket} className="flex flex-col items-center gap-1.5 h-full">
+            <div className="flex-1 w-full flex flex-col justify-end">
+              <div
+                className="w-full rounded-t-sm tnum text-[10px] text-[var(--color-text-muted)] flex items-start justify-center pt-0.5 transition-all"
+                style={{
+                  height: `${heightPct}%`,
+                  background: isLoss ? "var(--color-danger)" : "var(--color-success)",
+                  opacity: b.count === 0 ? 0.15 : 0.85,
+                  minHeight: b.count > 0 ? 8 : 2,
+                  color: b.count > 0 ? "white" : undefined,
+                }}
+              >
+                {b.count > 0 ? b.count : ""}
+              </div>
+            </div>
+            <div className="text-[10px] text-[var(--color-text-faint)] tnum text-center leading-tight">
+              {b.bucket}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -112,6 +191,39 @@ function StatCard({
       </CardContent>
     </Card>
   );
+}
+
+function trendOf(values: number[]): "up" | "down" | "flat" {
+  if (values.length < 2) return "flat";
+  const first = values[0]!;
+  const last = values[values.length - 1]!;
+  if (last > first) return "up";
+  if (last < first) return "down";
+  return "flat";
+}
+
+function computeHeadlineOutperformance(
+  curve: EquityCurvePayload | undefined,
+): { beating: boolean; deltaPct: number; windowLabel: string } | null {
+  if (!curve || curve.points.length < 2) return null;
+  const first = curve.points[0]!;
+  const last = curve.points[curve.points.length - 1]!;
+  if (first.btcEquivalent == null || last.btcEquivalent == null) return null;
+  if (first.equity <= 0 || first.btcEquivalent <= 0) return null;
+  const equityRet = ((last.equity - first.equity) / first.equity) * 100;
+  const btcRet = ((last.btcEquivalent - first.btcEquivalent) / first.btcEquivalent) * 100;
+  const delta = equityRet - btcRet;
+  // Label by the visible window, not the requested days — bot may be younger
+  // than the request window, in which case "60d" would be a lie.
+  const ms = new Date(last.ts).getTime() - new Date(first.ts).getTime();
+  const days = ms / 86_400_000;
+  const windowLabel =
+    days < 1
+      ? `${Math.max(1, Math.round(ms / 3_600_000))}h`
+      : days < 7
+        ? `${Math.round(days)}d`
+        : `${Math.round(days)}d`;
+  return { beating: delta >= 0, deltaPct: delta, windowLabel };
 }
 
 function ClosedTradeTable({ trades }: { trades: PerformancePayload["closedTrades"] }) {

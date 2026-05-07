@@ -18,8 +18,11 @@ export default defineConfig({
     // to the configured DATABASE_URL.
     setupFiles: ["test/setup.ts"],
     testTimeout: 30_000,
-    // Integration tests share DB state — opt them into a single fork so
-    // they don't race. Pure tests run with the default pool concurrency.
-    fileParallelism: !process.env.RUN_INTEGRATION,
+    // Run test files serially. Two files (lint-queries, execution-isolation)
+    // plant violation files under src/ and invoke scripts/lint-queries.sh,
+    // which scans the entire src tree. With parallel files, one's plant()
+    // can poison another's "baseline: clean codebase passes" assertion.
+    // The unit suite finishes in <1s either way.
+    fileParallelism: false,
   },
 });
