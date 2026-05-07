@@ -137,8 +137,11 @@ External:
 - App ID: `e3f67164-bc0f-481e-a17d-cb1a33c3c440`
 - App name: `huny-money`, service: `web`
 - Live URL: `https://huny-money-mfiyo.ondigitalocean.app`
-- Build: `npm run build`. Run: `npx drizzle-kit push --force && npm start`. Health: `/api/healthz` (90s init delay covers boot reconciliation).
+- Build: `npm run build`
+- Run: `npx tsx scripts/migrate-v1-to-v3.ts && npx drizzle-kit push --force && npm start`. The migrate script is idempotent — drops the schema only when v1 tables are present OR the v3 schema is the wrong shape (e.g., before the value-nullable change).
+- Health: `/api/healthz` (120s init delay covers migrate + push + boot reconciliation).
 - Auto-deploy from `main` is enabled but sometimes flaky — force via API call.
+- DO Postgres firewall blocks operator psql; schema operations only run inside the deploy sandbox.
 
 ## Development
 
@@ -165,8 +168,10 @@ The deploy command runs `drizzle-kit push --force` from inside the DO sandbox (w
 
 ## Key Technical Decisions & Gotchas
 
-1. **Lazy initialization everywhere.** `config.ts`, `db/index.ts`, `anthropic/client.ts` all use Proxy-based lazy loading. Next.js evaluates module scope at build time when env vars aren't available — eager init crashes the build.
-2. **`drizzle-kit` is a regular dependency** (not devDependency). Needed at runtime because the run command pushes schema. DO prunes devDeps after build.
+1. **Opus 4.7+ uses adaptive thinking, NOT `thinking.type: enabled` + `budget_tokens`.** The runtime API rejects the legacy shape with "thinking.type.enabled is not supported for this model. Use thinking.type.adaptive and output_config.effort". The current shape is `thinking: { type: "adaptive" }` + `output_config: { effort: "max"|"high"|"medium"|"low" }`. See `OPUS_EFFORT_BY_CALL_TYPE` in `src/lib/anthropic/client.ts`. Don't reintroduce `budget_tokens`.
+2. **All Anthropic calls use streaming.** SDK rejects `messages.create()` for any operation that *could* exceed 10 minutes — Opus + adaptive thinking trips this even on short prompts. We use `sdk().messages.stream(req).finalMessage()` for both Opus and Sonnet.
+3. **Lazy initialization everywhere.** `config.ts`, `db/index.ts`, `anthropic/client.ts` all use Proxy-based lazy loading. Next.js evaluates module scope at build time when env vars aren't available — eager init crashes the build.
+4. **`drizzle-kit` is a regular dependency** (not devDependency). Needed at runtime because the run command pushes schema. DO prunes devDeps after build.
 3. **`DATABASE_URL` is a DO template reference** (`${db.DATABASE_URL}`). Resolves at runtime, not build time. That's why schema push runs in the run_command not the build_command.
 4. **Coinbase EC key → PKCS#8 conversion.** Coinbase CDP keys are EC PEM format but `jose.importPKCS8` requires PKCS#8. Convert via `crypto.createPrivateKey()` before signing. See `src/lib/coinbase/client.ts`.
 5. **Paper mode is NOT a flag.** It's a typed executor object loaded once at boot. Mode flips require restart. The lint rule + file-level isolation make "no live order in paper mode" structurally guaranteed, not just runtime-tested.
@@ -174,14 +179,25 @@ The deploy command runs `drizzle-kit push --force` from inside the DO sandbox (w
 7. **Auto-deploy unreliable.** Force via `POST /v2/apps/{id}/deployments {"force_build": true}` if needed.
 8. **Next.js 16 middleware deprecation.** Shows warning about renaming `middleware` to `proxy`. Functionality still works; will need updating eventually.
 9. **DO Postgres firewall blocks operator psql.** Schema operations run inside the DO app's run_command (`drizzle-kit push --force`).
+10. **`state.value` is nullable on purpose.** Keys legitimately transition to null (cooldown_until expires, current_regime is "unset" until first morning brief). Same for `system_state_history.new_value`. Don't reintroduce NOT NULL.
+11. **RSS User-Agent header must be ASCII.** Em-dashes ("—"), smart quotes, etc. break the http client's header validation. See `src/lib/news/rss-poller.ts`.
+
+## Status
+
+**Deployed and live** at https://huny-money-mfiyo.ondigitalocean.app in paper mode. Boot has succeeded; scheduler is ticking; cycle range job has run. Phase 10 (60-day paper window) is in progress.
+
+**Confirmed working live:** boot sequence, Coinbase JWT auth + TRADE-only check, cycle range nightly job (5/5 watchlist assets), pause/resume, all 9 control buttons (Pause/Resume, Force Brief, Force Reconcile, Mode Toggle, Close All, Convert to BTC core hold) with proper confirmation dialogs.
+
+**Not yet exercised live:**
+- Successful Opus morning brief (last attempt failed on legacy-thinking-config issue, since fixed; the next 14:00 UTC tick OR a Force Brief click will be the first real test)
+- Sonnet checkpoint with a brief in scope
+- Wake-up triggers (need positions or significant moves)
+- Mode toggle / close-all / convert-to-BTC end-to-end (need positions to exist first for some)
 
 ## What's Next
 
-After successful deploy:
-1. Operator validates dashboard end-to-end (login, header live ticker, all 9 views, cmd+K palette, pause/resume)
-2. **Phase 10: Phase 1 paper trading** begins — 60 calendar days of observation
-3. First morning brief fires at the next 14:00 UTC tick after deploy
-4. Operator reads ≥ 10 morning briefs and judges them coherent
-5. At 60 days, evaluate Phase 1 advance criteria per `STRATEGY.md §6.3`. If all pass → Phase 2 (half-size live, 60 days). If any fail → extend or shut down.
+1. First morning brief at next 14:00 UTC tick (or via dashboard Force Brief button)
+2. Operator reads ≥ 10 morning briefs and judges them coherent
+3. At 60 days, evaluate Phase 1 advance criteria per `STRATEGY.md §6.3`. Pass → Phase 2 (half-size live, 60 days). Fail → extend or shut down.
 
-The bot is built. It now needs to earn the right to trade — first by being coherent in paper, then by beating BTC.
+The bot is built and live. It now needs to earn the right to trade — first by being coherent in paper, then by beating BTC.
