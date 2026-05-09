@@ -22,6 +22,11 @@ export {
   getOrderBook,
   type TickerSummary,
 } from "./market-data";
+export {
+  fetchPortfolioSnapshot,
+  type PortfolioSnapshot,
+  type PortfolioHolding,
+} from "./portfolio-snapshot";
 export type {
   Account,
   ApiKeyPermissions,

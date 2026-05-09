@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PageHeader } from "@/components/page-header";
 import { useApi, apiPost } from "@/lib/hooks/api";
-import { Bitcoin, Bot, Loader2, Pause, Play, RefreshCw, Repeat, X } from "lucide-react";
+import { Bitcoin, Bot, Loader2, Pause, Play, RefreshCw, Repeat, Wallet, X } from "lucide-react";
 import type { DashboardStatusPayload } from "@/app/api/dashboard/status/route";
 
 export default function ControlsPage() {
@@ -17,6 +17,7 @@ export default function ControlsPage() {
   const [closeAllOpen, setCloseAllOpen] = useState(false);
   const [convertOpen, setConvertOpen] = useState(false);
   const [toggleOpen, setToggleOpen] = useState(false);
+  const [reAnchorOpen, setReAnchorOpen] = useState(false);
 
   const paused = data?.paused ?? false;
   const mode = data?.mode ?? "paper";
@@ -188,6 +189,30 @@ export default function ControlsPage() {
           </CardContent>
         </Card>
 
+        <Card>
+          <CardHeader>
+            <CardTitle>Re-anchor starting capital</CardTitle>
+            <CardDescription>
+              Reads current Coinbase balances across the full strategy universe (USD/USDC +
+              BTC/ETH/AERO/LINK/AAVE/UNI/SOL), marks each to market, and resets
+              starting_capital, the BTC anchor, and the equity-curve seeds for the current
+              mode. Use this if first-launch captured the wrong capital (e.g. before the
+              full-asset scan landed) or if you've added/withdrawn funds. Equity curve
+              restarts from this snapshot.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              variant="outline"
+              onClick={() => setReAnchorOpen(true)}
+              disabled={busy != null}
+            >
+              <Wallet />
+              Re-anchor capital…
+            </Button>
+          </CardContent>
+        </Card>
+
         <Card className="border-[var(--color-warning)]/30">
           <CardHeader>
             <CardTitle>Convert to BTC core hold</CardTitle>
@@ -209,6 +234,27 @@ export default function ControlsPage() {
           </CardContent>
         </Card>
       </div>
+
+      <ConfirmDialog
+        open={reAnchorOpen}
+        onOpenChange={setReAnchorOpen}
+        title="Re-anchor starting capital from Coinbase?"
+        description={
+          <>
+            This reads current Coinbase balances across <strong>USD, USDC, BTC, ETH, AERO,
+            LINK, AAVE, UNI, SOL</strong>, sums to a new total, and resets the current mode's{" "}
+            <code>starting_capital</code>, BTC buy-and-hold anchor, and equity-curve seeds.
+            The equity curve <strong>restarts</strong> from this snapshot — historical
+            equity rows aren't deleted, but the headline metrics are anchored to today.
+            Idempotent and safe to re-run.
+          </>
+        }
+        tone="warning"
+        confirmLabel="Re-anchor capital"
+        onConfirm={async (payload) =>
+          postControl("Re-anchor capital", "/api/controls/re-anchor-capital", payload)
+        }
+      />
 
       <ConfirmDialog
         open={closeAllOpen}

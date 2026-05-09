@@ -5,7 +5,7 @@ import {
   CrossModeBootRejection,
 } from "@/lib/execution";
 import { clearModeChangePendingFlag } from "@/lib/execution/mode-transition";
-import { assertTradeOnlyKey, getAllBalances, getTicker } from "@/lib/coinbase";
+import { assertTradeOnlyKey, fetchPortfolioSnapshot, getTicker } from "@/lib/coinbase";
 import { startScheduler, type SchedulerHandlers } from "@/lib/scheduler";
 import { runCycleRangeJob } from "@/lib/scheduler/cycle-range-job";
 import { runScheduledMorningBrief } from "@/lib/orchestration/morning-brief";
@@ -140,24 +140,25 @@ export async function runBoot(): Promise<BootResult> {
 async function initializeFirstLaunch(): Promise<number> {
   log.info("First launch — initializing state defaults");
 
-  // Read account balance from Coinbase to capture starting capital.
-  const balances = await getAllBalances(["USD", "USDC", "BTC", "ETH", "SOL"]);
-  const usdc = (balances.USDC?.total ?? 0) + (balances.USD?.total ?? 0);
-  const btcVal = balances.BTC?.total ?? 0;
-  const ethVal = balances.ETH?.total ?? 0;
-  const solVal = balances.SOL?.total ?? 0;
+  // Capture starting capital across the FULL strategy universe (USD/USDC +
+  // BTC/ETH/AERO/LINK/AAVE/UNI/SOL). The previous version only checked
+  // BTC/ETH/SOL — anything held in AERO/LINK/AAVE/UNI was invisible to the
+  // capital scan and `starting_capital_paper_usd` came back wrong.
+  const snapshot = await fetchPortfolioSnapshot();
+  const totalUsd = snapshot.totalUsd;
+  const btcPriceUsd = snapshot.btcPriceUsd;
 
-  // Crude initial valuation — for paper mode this is the starting USDC
-  // figure plus marked-to-market crypto if any happens to be in the account.
-  const btcTicker = await getTicker("BTC-USD");
-  const ethTicker = await getTicker("ETH-USD").catch(() => null);
-  const solTicker = await getTicker("SOL-USD").catch(() => null);
-
-  const totalUsd =
-    usdc +
-    btcVal * btcTicker.midPrice +
-    ethVal * (ethTicker?.midPrice ?? 0) +
-    solVal * (solTicker?.midPrice ?? 0);
+  log.info("First-launch portfolio snapshot", {
+    cashUsd: snapshot.cashUsd,
+    totalUsd,
+    holdings: snapshot.holdings.map((h) => ({
+      asset: h.asset,
+      quantity: h.quantity,
+      priceUsd: h.priceUsd,
+      valueUsd: h.valueUsd,
+    })),
+    missingPriceAssets: snapshot.missingPriceAssets,
+  });
 
   await stateWriter({ key: "phase", value: "paper", changedBy: "boot.first-launch" });
   await stateWriter({ key: "paper_mode", value: true, changedBy: "boot.first-launch" });
@@ -195,7 +196,7 @@ async function initializeFirstLaunch(): Promise<number> {
   });
   await stateWriter({
     key: "btc_price_at_start_paper",
-    value: btcTicker.midPrice,
+    value: btcPriceUsd,
     changedBy: "boot.first-launch",
   });
   await stateWriter({
@@ -224,7 +225,7 @@ async function initializeFirstLaunch(): Promise<number> {
 
   log.info("First-launch state initialized", {
     startingCapitalUsd: totalUsd,
-    btcAnchor: btcTicker.midPrice,
+    btcAnchor: btcPriceUsd,
   });
 
   return totalUsd;
