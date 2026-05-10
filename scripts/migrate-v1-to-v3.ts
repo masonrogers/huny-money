@@ -74,6 +74,17 @@ async function main() {
       console.log(
         `[migrate-v1-to-v3] v3 schema is settled (${rows.length} tables, state.value is nullable). Skipping drop.`,
       );
+      // Apply idempotent additive column migrations before returning so the
+      // running app sees the new shape even when drizzle-kit's push plan
+      // chokes on unrelated drift (we hit a 42P16 dropconstraint_internal
+      // failure on a feesUsd column add — drizzle-kit generated a redefine
+      // plan that tried to drop the orders_pkey, which Postgres refuses).
+      // Each ALTER below MUST be safe to run on a schema where the column
+      // already exists (IF NOT EXISTS) and on a schema where the table
+      // doesn't yet exist (this whole block is skipped on v1-detected /
+      // unsettled-v3 cases — the schema gets dropped + recreated below
+      // instead).
+      await applyAdditiveMigrations(sql);
       return;
     }
 
@@ -93,6 +104,40 @@ async function main() {
     process.exit(1);
   } finally {
     await sql.end();
+  }
+}
+
+/**
+ * Idempotent additive column migrations applied on every v3-settled deploy
+ * BEFORE drizzle-kit push runs. Each statement uses IF NOT EXISTS so it's
+ * safe to re-run. If drizzle-kit's diff plan can't apply the column add for
+ * any reason (e.g., the 42P16 redefine bug we hit on the feesUsd add), the
+ * raw ALTER here ensures boot still finds the column.
+ *
+ * To add a new column to v3:
+ *   1. Update the schema in `src/lib/db/schema.ts` as usual
+ *   2. Add the equivalent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...` here
+ *   3. Deploy
+ *
+ * This is a small layer of belt-and-braces — drizzle-kit push still runs
+ * after and is the source of truth for indexes, FK constraints, and
+ * type changes that aren't pure column adds.
+ */
+async function applyAdditiveMigrations(sql: ReturnType<typeof postgres>): Promise<void> {
+  const migrations: Array<{ name: string; statement: string }> = [
+    {
+      name: "orders.fees_usd",
+      statement: `ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "fees_usd" numeric(20, 8)`,
+    },
+  ];
+  for (const m of migrations) {
+    try {
+      await sql.unsafe(m.statement);
+      console.log(`[migrate-v1-to-v3] applied additive migration: ${m.name}`);
+    } catch (err) {
+      console.error(`[migrate-v1-to-v3] additive migration failed (${m.name}):`, (err as Error).message);
+      throw err;
+    }
   }
 }
 
