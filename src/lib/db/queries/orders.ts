@@ -210,10 +210,11 @@ export async function paperCashFlowsFromDb(): Promise<PaperCashFlows> {
  * {@link filledSellQtyByPositionForCurrentMode}.
  *
  * Used by the equity snapshotter to compute remaining open quantity for
- * positions undergoing laddered exits. Sells fill in-stream but the
- * position row is not closed until next reconciliation (see
- * `wakeup-cycle.ts` — the `void updatePosition` stub). Without subtracting
- * already-sold portions, mark-to-market would double-count the sold legs.
+ * positions undergoing laddered exits. The wakeup-cycle close-on-fill path
+ * closes a position once its EXIT order fills (FINDINGS #30); but during
+ * the interim — between a partial-sell fill and the eventual exit fill —
+ * the position is still `open` with original quantity. Without subtracting
+ * already-sold portions here, mark-to-market would double-count the sold legs.
  */
 export function summarizeFilledSellQtyByPosition(
   rows: ReadonlyArray<{ positionId: string | null; qty: string | null; status?: string; side?: string }>,

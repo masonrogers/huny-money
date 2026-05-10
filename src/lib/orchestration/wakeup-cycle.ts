@@ -443,5 +443,4 @@ async function persistSeenNewsIds(newIds: readonly string[]): Promise<void> {
     value: ordered,
     changedBy: "wakeup-cycle",
   });
-  void updatePosition; // silence unused-import warning if not yet hooked
 }
