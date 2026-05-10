@@ -134,7 +134,7 @@ You DO:
 
 # OUTPUT CONTRACT
 
-You MUST respond with a single JSON object matching exactly this schema. No prose before or after. Watch list is hard-capped at ${MAX_WATCHLIST_TRIGGERS} items.
+You MUST respond with a single JSON object matching exactly this schema. **Raw JSON only — your response must start with an opening curly brace and end with a closing curly brace. Do NOT wrap the JSON in markdown code fences (no triple-backtick json or triple-backtick anywhere in your output).** No prose before or after. Watch list is hard-capped at ${MAX_WATCHLIST_TRIGGERS} items.
 
 \`\`\`json
 {

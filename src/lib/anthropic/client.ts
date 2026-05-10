@@ -10,6 +10,54 @@ import { MODELS, type ModelId, computeCost, type UsageBreakdown } from "./pricin
 import type { CallType } from "./budget-gate";
 
 // ---------------------------------------------------------------------------
+// JSON-from-LLM-response parser
+// ---------------------------------------------------------------------------
+
+/**
+ * Lenient JSON parser for LLM responses.
+ *
+ * Claude often wraps JSON in markdown code fences (```json ... ```) even when
+ * the prompt says "no prose before or after." Anthropic SDK output also
+ * sometimes carries trailing whitespace or accidental prose. This helper
+ * tries:
+ *   1. Direct JSON.parse on the raw text
+ *   2. JSON.parse on the contents of a ```json ... ``` or ``` ... ``` fence
+ *   3. JSON.parse on the substring from the first `{` to the last `}`
+ *      (rescues responses with a stray sentence before/after the object)
+ *
+ * Returns null if all three fail. The prior bare-JSON.parse approach silently
+ * lost a $0.27 morning brief (Opus 4.7 + max effort) on every fence-wrapped
+ * response — see commit message for the live incident on 2026-05-09.
+ */
+export function parseJsonLenient(text: string): unknown | null {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    // fall through
+  }
+  const trimmed = text.trim();
+  const fenceMatch = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/i);
+  if (fenceMatch) {
+    try {
+      return JSON.parse(fenceMatch[1]!);
+    } catch {
+      // fall through
+    }
+  }
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+    } catch {
+      // fall through
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // SDK singleton
 // ---------------------------------------------------------------------------
 
@@ -157,13 +205,7 @@ export async function callClaude(input: ClaudeCallInput): Promise<ClaudeCallResu
   );
   const responseText = textBlocks.map((b) => b.text).join("\n");
 
-  let parsedJson: unknown | null = null;
-  try {
-    parsedJson = JSON.parse(responseText);
-  } catch {
-    // Not all responses are JSON. Caller validates schema if expected.
-    parsedJson = null;
-  }
+  const parsedJson = parseJsonLenient(responseText);
 
   const usage: UsageBreakdown = {
     inputTokens: message.usage.input_tokens,
