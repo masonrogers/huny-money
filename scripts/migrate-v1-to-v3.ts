@@ -80,7 +80,6 @@ async function main() {
       // failure on a feesUsd column add — drizzle-kit generated a redefine
       // plan that tried to drop the orders_pkey, which Postgres refuses).
       await applyAdditiveMigrations(sql);
-      await logSchemaDiagnostic(sql);
       return;
     }
 
@@ -130,69 +129,6 @@ async function applyAdditiveMigrations(sql: ReturnType<typeof postgres>): Promis
       console.error(`[migrate-v1-to-v3] additive migration failed (${m.name}):`, (err as Error).message);
       throw err;
     }
-  }
-}
-
-/**
- * One-shot schema diagnostic — logs columns + constraints for the tables
- * drizzle-kit's push has been complaining about. Runs after additive
- * migrations so we can see exactly what state drizzle-kit then chokes on.
- *
- * Remove this once the prod-DB drift is identified and fixed.
- */
-async function logSchemaDiagnostic(sql: ReturnType<typeof postgres>): Promise<void> {
-  try {
-    for (const table of ["orders", "positions"] as const) {
-      const cols = await sql<
-        {
-          column_name: string;
-          data_type: string;
-          is_nullable: string;
-          column_default: string | null;
-        }[]
-      >`
-        SELECT column_name, data_type, is_nullable, column_default
-        FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = ${table}
-        ORDER BY ordinal_position
-      `;
-      console.log(`[schema-diagnostic] ${table} columns:`);
-      for (const c of cols) {
-        console.log(
-          `  ${c.column_name.padEnd(28)} ${c.data_type.padEnd(28)} nullable=${c.is_nullable} default=${c.column_default ?? "(none)"}`,
-        );
-      }
-
-      const cons = await sql<{ conname: string; contype: string; def: string }[]>`
-        SELECT
-          c.conname,
-          c.contype::text,
-          pg_get_constraintdef(c.oid) AS def
-        FROM pg_constraint c
-        JOIN pg_class t ON t.oid = c.conrelid
-        JOIN pg_namespace n ON n.oid = t.relnamespace
-        WHERE n.nspname = 'public' AND t.relname = ${table}
-        ORDER BY c.conname
-      `;
-      console.log(`[schema-diagnostic] ${table} constraints:`);
-      for (const c of cons) {
-        console.log(`  [${c.contype}] ${c.conname}: ${c.def}`);
-      }
-
-      const idx = await sql<{ indexname: string; indexdef: string }[]>`
-        SELECT indexname, indexdef
-        FROM pg_indexes
-        WHERE schemaname = 'public' AND tablename = ${table}
-        ORDER BY indexname
-      `;
-      console.log(`[schema-diagnostic] ${table} indexes:`);
-      for (const i of idx) {
-        console.log(`  ${i.indexname}: ${i.indexdef}`);
-      }
-    }
-  } catch (err) {
-    console.error("[schema-diagnostic] introspection failed:", (err as Error).message);
-    // Diagnostic only — never fail the deploy on this.
   }
 }
 

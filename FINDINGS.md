@@ -15,7 +15,7 @@ After landing the bug-fix wave during the live force-iteration loop, a follow-up
 - **#8** — 7 react-hooks/set-state-in-effect warnings, downgraded to warn. Legitimate hydration / clear-on-open patterns.
 - **#12, #13, #14** — documentation drift / one-time data issues. The runtime $10k paper anchor was operator-induced; CLAUDE.md still correctly references the $500 constant.
 - **Live-mode `orders.feesUsd` population** — the new column exists; live executor needs a reconciliation step to write Coinbase fee data. Not urgent until Phase 2 (live trading).
-- **drizzle-kit push 42P16 root cause** — push has been silently failing on every prod deploy with `column "id" is in a primary key`. `applyAdditiveMigrations` is the safety net. Diagnostic added in commit `147eced` to log prod-DB schema drift; root cause + fix are the next concrete cleanup once the diagnostic output is in hand.
+- **drizzle-kit push 42P16** — root cause identified: DO managed Postgres is pg18, which adds named NOT NULL constraints to `pg_constraint`. drizzle-kit 0.28 sees these as drift and emits `DROP CONSTRAINT` statements, which Postgres refuses for PK columns. `applyAdditiveMigrations` is the safety net for column adds. Long-term fix is drizzle-kit upgrade OR replacing `drizzle-kit push` in the deploy run_command with hand-rolled migrations — neither has been done yet. Also: prod `positions.{asset,direction,entry_price,entry_time}` are nullable but should be NOT NULL (pre-existing drift, separate from the pg18 issue). See CLAUDE.md gotcha #18.
 
 After this sweep: 264 unit tests pass, eslint shows only the 7 warnings noted in #8, lint:queries clean, build OK with stub envs.
 
