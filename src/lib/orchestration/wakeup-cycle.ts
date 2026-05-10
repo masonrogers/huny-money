@@ -15,6 +15,7 @@ import type { MorningBrief } from "@/lib/ai/schemas";
 import { pollAllFeeds } from "@/lib/news";
 import { CORE_ASSETS, productIdFor } from "@/lib/strategy/constants";
 import { persistEquitySnapshot } from "@/lib/orchestration/equity-snapshotter";
+import { processPendingEntryLadders } from "@/lib/orchestration/entry-ladder";
 import { withActivity } from "@/lib/activity/tracker";
 import { log } from "@/lib/logger";
 
@@ -42,6 +43,7 @@ export interface WakeupCycleResult {
   pricesWritten: boolean;
   equitySnapshotWritten: boolean;
   paperFills: number;
+  ladderTranchesPlaced: number;
   positionMoveFires: number;
   stopFillFires: number;
   newsKeywordFires: number;
@@ -62,6 +64,7 @@ async function runWakeupCycleImpl(): Promise<WakeupCycleResult> {
     pricesWritten: false,
     equitySnapshotWritten: false,
     paperFills: 0,
+    ladderTranchesPlaced: 0,
     positionMoveFires: 0,
     stopFillFires: 0,
     newsKeywordFires: 0,
@@ -101,6 +104,16 @@ async function runWakeupCycleImpl(): Promise<WakeupCycleResult> {
     //     equity reflects this tick's settlements rather than last tick's.
     const equitySnap = await persistEquitySnapshot(prices);
     result.equitySnapshotWritten = equitySnap != null;
+
+    // 3b. Process pending entry-ladder tranche-2 placements (STRATEGY.md §3.5).
+    //     Runs after fills + equity so any new tranche-2 fills land in the
+    //     NEXT tick's equity snapshot rather than partially in this one.
+    try {
+      const ladderResult = await processPendingEntryLadders(prices);
+      result.ladderTranchesPlaced = ladderResult.placed;
+    } catch (err) {
+      result.errors.push(`entry-ladder: ${(err as Error).message}`);
+    }
 
     // 4. Update position states for fills
     for (const fill of fills) {
@@ -179,6 +192,7 @@ async function runWakeupCycleImpl(): Promise<WakeupCycleResult> {
 
   if (
     result.paperFills > 0 ||
+    result.ladderTranchesPlaced > 0 ||
     result.positionMoveFires > 0 ||
     result.stopFillFires > 0 ||
     result.newsKeywordFires > 0

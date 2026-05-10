@@ -10,6 +10,11 @@ import type { OrderExecutor } from "@/lib/execution/interface";
 import { altSizing, btcCoreSizing } from "@/lib/risk/position-sizing";
 import { checkAltCooldown, checkDailyLossCap, checkHardFloor } from "@/lib/risk/circuit-breakers";
 import {
+  appendPendingLadder,
+  scheduleTrancheTwo,
+  trancheUsd as halfTrancheUsd,
+} from "@/lib/orchestration/entry-ladder";
+import {
   ALT_TRAILING_STOP_SCHEDULE,
   STRATEGY_VERSION,
   MIN_POSITION_SIZE_USD,
@@ -417,20 +422,26 @@ async function executeAltEntry(
     };
   }
 
-  const quantity = quantityFor(sizing.effectiveSizeUsd, price);
-  if (quantity <= 0) {
-    return { kind: "skipped", reason: "quantity computed as zero" };
+  // Two-tranche ladder per STRATEGY.md §3.5 — split sizing across 24h.
+  // Tranche 1 fills now; tranche 2 is queued for processing by the wake-up
+  // cycle ~12h later. Each leg is sized at half the AI's intended USD.
+  const tranche1Usd = halfTrancheUsd(sizing.effectiveSizeUsd);
+  const tranche1Qty = quantityFor(tranche1Usd, price);
+  if (tranche1Qty <= 0) {
+    return { kind: "skipped", reason: "tranche-1 quantity computed as zero" };
   }
 
+  // The position's quantity field reflects what we ACTUALLY hold — currently
+  // just tranche 1. The ladder processor updates this to the combined qty
+  // after tranche 2 lands.
   try {
-    // Insert the position row first so the order can reference it.
     const position = await insertPosition({
       asset,
       type: "alt_cycle",
       status: "open",
       direction: "long",
       entryPrice: price.toString(),
-      quantity: quantity.toString(),
+      quantity: tranche1Qty.toString(),
       stopPrice: initialStopPrice(price, candidate.stop_pct).toString(),
       targetPrice: null,
       convictionAtEntry: candidate.conviction,
@@ -442,30 +453,54 @@ async function executeAltEntry(
       paperMode: executor.mode === "paper",
     });
 
-    const entryOrder = await executor.placeLimitBuy(asset, price, quantity, {
+    const entryOrder = await executor.placeLimitBuy(asset, price, tranche1Qty, {
       relatedPositionId: position.id,
     });
 
-    // Best-effort initial stop. If this throws, position is already created;
-    // reconciliation will detect the missing stop and place it on next boot.
+    // Best-effort initial stop on tranche-1 quantity. The ladder processor
+    // re-places this on the combined quantity when tranche 2 lands. If this
+    // throws, reconciliation will place the missing stop on next boot.
     const stopPrice = initialStopPrice(price, candidate.stop_pct);
     const stopLimitPrice = stopPrice * 0.995; // a hair below trigger to ensure marketability
+    let stopOrderId: string | null = null;
     try {
-      await executor.placeStopLimit(asset, stopPrice, stopLimitPrice, quantity, {
-        relatedPositionId: position.id,
-      });
+      const stopOrder = await executor.placeStopLimit(
+        asset,
+        stopPrice,
+        stopLimitPrice,
+        tranche1Qty,
+        { relatedPositionId: position.id },
+      );
+      stopOrderId = stopOrder.coinbaseOrderId;
+      await updatePosition(position.id, { stopOrderId });
     } catch (err) {
       await errorLogger({
         severity: "warning",
         component: "orchestration.decision-executor",
         error: err instanceof Error ? err : new Error(String(err)),
-        context: { asset, positionId: position.id, stopPrice, quantity },
+        context: { asset, positionId: position.id, stopPrice, quantity: tranche1Qty },
         recovered: true,
         recoveryAction:
           "Position created and entry filled; reconciliation will place the missing stop on next boot.",
       });
     }
 
+    // Queue tranche 2 for ~12h from now. Skipped only if the tranche size
+    // would fall below the minimum-position-size — in that case the position
+    // is just the single tranche.
+    const tranche2Usd = sizing.effectiveSizeUsd - tranche1Usd;
+    if (tranche2Usd >= MIN_POSITION_SIZE_USD) {
+      await appendPendingLadder({
+        positionId: position.id,
+        asset,
+        trancheUsd: tranche2Usd,
+        originalEntryPrice: price,
+        scheduledAt: scheduleTrancheTwo(new Date()).toISOString(),
+        evaluationId: ctx.evaluationId,
+      });
+    }
+
+    const ladderPlanned = tranche2Usd >= MIN_POSITION_SIZE_USD;
     await appDecisionLogger({
       decisionType: "order_routing",
       inputs: {
@@ -479,16 +514,22 @@ async function executeAltEntry(
         orderId: entryOrder.coinbaseOrderId,
         effectiveSizeUsd: sizing.effectiveSizeUsd,
         effectiveSizePct: sizing.effectiveSizePct,
+        tranche1Usd,
+        tranche2Usd: ladderPlanned ? tranche2Usd : 0,
+        ladderPlanned,
         entryPrice: price,
         stopPrice,
       },
-      reasoning: `Alt cycle entry placed: ${asset} at $${price.toFixed(4)} for $${sizing.effectiveSizeUsd.toFixed(2)} (conviction ${candidate.conviction}). Initial stop at -${candidate.stop_pct.toFixed(1)}% = $${stopPrice.toFixed(4)}.`,
+      reasoning: ladderPlanned
+        ? `Alt cycle entry — tranche 1 of 2: ${asset} at $${price.toFixed(4)} for $${tranche1Usd.toFixed(2)} (conviction ${candidate.conviction}). Initial stop at -${candidate.stop_pct.toFixed(1)}% = $${stopPrice.toFixed(4)}. Tranche 2 of $${tranche2Usd.toFixed(2)} queued for ~12h from now.`
+        : `Alt cycle entry: ${asset} at $${price.toFixed(4)} for $${sizing.effectiveSizeUsd.toFixed(2)} (conviction ${candidate.conviction}). Initial stop at -${candidate.stop_pct.toFixed(1)}% = $${stopPrice.toFixed(4)}. Single tranche — half-size below minimum.`,
       relatedEntity: position.id,
     });
 
-    log.info("Alt cycle entry placed", {
+    log.info("Alt cycle entry tranche 1 placed", {
       asset,
-      sizeUsd: sizing.effectiveSizeUsd,
+      tranche1Usd,
+      tranche2Usd: ladderPlanned ? tranche2Usd : null,
       price,
       stopPrice,
       positionId: position.id,
@@ -498,7 +539,7 @@ async function executeAltEntry(
       kind: "placed",
       orderId: entryOrder.coinbaseOrderId,
       positionId: position.id,
-      sizeUsd: sizing.effectiveSizeUsd,
+      sizeUsd: tranche1Usd,
       price,
     };
   } catch (err) {
