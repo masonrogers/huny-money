@@ -65,6 +65,31 @@ Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for th
 - **Fix:** Hoist the singleton storage to `globalThis`. This is the standard Next.js / Drizzle / Prisma pattern for surviving HMR + bundle splitting. globalThis is shared across all bundles within the same Node process. Single-process app on DO basic-xxs, so this is sufficient — no DB-backed singleton needed.
 - **Found by:** Logging in via the dashboard's auth flow, POST /api/controls/force-brief, immediate response with the error. This was the first action attempt after CI was wired and the new code deployed.
 
+### 11. BTC core entry path never inserts a position record
+- **File:** `src/lib/orchestration/decision-executor.ts` lines 591–614 (the `dca_in` branch of `executeBtcCoreDecision`)
+- **Severity:** CATASTROPHIC if the bot keeps running. The bot would:
+  1. DCA in $X of BTC on day 1 (order filled, cash deducted, no position created)
+  2. Day 2 morning brief reads `currentBtcCoreUsd = 0` (sums positions of type btc_core, which is empty)
+  3. AI decides to DCA in to reach 50%-of-account target — places another full-size order
+  4. Repeat until cash runs out, somewhere around day 2–3 in paper, or worse in live (real BTC actually being bought, but bookkeeping invisible)
+  5. Equity calculation in `last_equity_paper_usd` undercounts equity (positions value = 0), so the dashboard shows the operator "losing" money equal to all the BTC purchased
+- **Cause:** The alt-cycle path (lines 438+) correctly calls `insertPosition({ type: "alt_cycle", ... })` before placing the order. The BTC core path was never given the equivalent — order is placed, no position row inserted.
+- **Confirmation in production:** First successful force-brief (post `06e4a0e` deploy) returned `{ kind: "placed", orderId: paper-ffab43a0..., sizeUsd: 5000, price: 80729.51 }`. `/api/dashboard/positions` then returned `open: []`. Order is in the orders table; no position exists.
+- **Why missed:** `decision-executor.test.ts` exists and tests pure helpers (preflight, sizing, trailing-stop ratchet, partial-sell quantity) but not the full BTC core entry → position bookkeeping. Integration tests under `test/integration/` cover state-writer, budget gate, paper isolation, mode transition, circuit breakers — but not orchestration end-to-end. There is no test that asserts "after `dca_in`, a `positions` row of type `btc_core` exists with the bought quantity."
+- **Status:** Bot paused as of 05:11 UTC to prevent the 14:00 UTC scheduled brief from making this mistake again. Fix in progress.
+
+### 12. Paper starting capital is $10,000, not the documented $500
+- **File:** documentation drift — `CLAUDE.md` says `PAPER_STARTING_CAPITAL_USD = 500`, but `/api/dashboard/wallet` returns `paper.startingCapitalUsd = 10000`.
+- **Severity:** Low (cosmetic + docs). The bot itself is consistent — chop regime → 50% target → $5000 sized order matches a $10k account. Only the documentation is wrong.
+- **Likely cause:** Operator re-anchored at some point via `POST /api/controls/re-anchor-capital` (which CLAUDE.md notes accepts an operator-supplied amount in paper mode). Or `PAPER_STARTING_CAPITAL_USD` was changed in the code constant since CLAUDE.md was written.
+- **Disposition:** Note for memory update — paper starting capital is currently $10k. Don't claim $500 anywhere.
+
+### 13. Coinbase wallet content has drifted from documentation
+- **File:** documentation drift — `CLAUDE.md` says "Old key 88674a25 has the $500 USDC."
+- **Severity:** Low (informational), MEDIUM if the bot ever flips to live mode.
+- **Actual content (snapshot 2026-05-10T05:08 UTC):** $1557.31 total — 3076 AERO ($1557.01) + dust ETH ($0.0000075) + $0.30 USDC. So the operator has been actively using the funded key — most of the value is in AERO (a watchlist asset), almost no cash.
+- **Implication for live-mode flip:** Cross-mode boot rejection only checks the bot's own positions tables. It does NOT check the real wallet. If the bot is flipped to live mode, the live executor will see ~$0.30 cash and 3076 AERO sitting in the wallet that it didn't put there. Re-anchor would capture $1557 starting capital but the bot wouldn't know the AERO is "the operator's holding" vs "an existing position." Worth thinking about before any live-mode test.
+
 ## Stylistic findings (downgraded to warning)
 
 ### 8. `react-hooks/set-state-in-effect` — 7 warnings remaining

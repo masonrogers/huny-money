@@ -588,6 +588,11 @@ async function executeBtcCoreAction(
     }
   }
 
+  // BTC core uses ONE evergreen position (mirrors the alt pattern: one row,
+  // updated as DCA tranches add/remove qty). Find or null.
+  const openPositions = await openPositionsForCurrentMode();
+  const existingBtcCore = openPositions.find((p) => p.type === "btc_core") ?? null;
+
   try {
     if (decision.action === "dca_in" && deltaUsd > 0) {
       // For MVP: place tranche 1 at full delta. STRATEGY.md §3.6 calls for
@@ -600,6 +605,45 @@ async function executeBtcCoreAction(
       }
       const qty = quantityFor(deltaUsd, btcPrice);
       const order = await executor.placeDcaLimitBuy("BTC", btcPrice, qty);
+
+      // Critical: update or insert the btc_core position record. Without this,
+      // tomorrow's brief would read currentBtcCoreUsd=0 and DCA in again
+      // forever (FINDINGS.md #11).
+      let positionId: string;
+      if (existingBtcCore) {
+        const oldQty = parseFloat(existingBtcCore.quantity);
+        const oldEntry = parseFloat(existingBtcCore.entryPrice);
+        const newQty = oldQty + qty;
+        // Weighted-average entry: (oldQty*oldEntry + newQty*newPrice) / totalQty.
+        const newEntry = newQty > 0
+          ? (oldQty * oldEntry + qty * btcPrice) / newQty
+          : btcPrice;
+        await updatePosition(existingBtcCore.id, {
+          quantity: newQty.toString(),
+          entryPrice: newEntry.toString(),
+        });
+        positionId = existingBtcCore.id;
+      } else {
+        const inserted = await insertPosition({
+          asset: "BTC",
+          type: "btc_core",
+          status: "open",
+          direction: "long",
+          entryPrice: btcPrice.toString(),
+          quantity: qty.toString(),
+          stopPrice: null, // BTC core has NO trailing stop per STRATEGY.md §3.7
+          targetPrice: null,
+          convictionAtEntry: null,
+          catalyst: `regime=${regime} dca_in`,
+          thesis: decision.reasoning,
+          entryTime: new Date(),
+          strategyVersion: STRATEGY_VERSION,
+          regimeAtEntry: regime,
+          paperMode: executor.mode === "paper",
+        });
+        positionId = inserted.id;
+      }
+
       await logBtcCoreDecision(ctx, decision, regime, {
         order: order.coinbaseOrderId,
         deltaUsd,
@@ -608,6 +652,7 @@ async function executeBtcCoreAction(
       return {
         kind: "placed",
         orderId: order.coinbaseOrderId,
+        positionId,
         sizeUsd: deltaUsd,
         price: btcPrice,
       };
@@ -626,6 +671,37 @@ async function executeBtcCoreAction(
       }
       const qty = quantityFor(sellUsd, btcPrice);
       const order = await executor.placeMarketExit("BTC", qty);
+
+      // Update the btc_core position record. Decrement qty (or close on exit).
+      if (existingBtcCore) {
+        if (decision.action === "exit") {
+          await updatePosition(existingBtcCore.id, {
+            status: "closed",
+            exitPrice: btcPrice.toString(),
+            exitTime: new Date(),
+            exitReason: `regime=${regime} exit`,
+          });
+        } else {
+          const oldQty = parseFloat(existingBtcCore.quantity);
+          const newQty = Math.max(0, oldQty - qty);
+          if (newQty <= 0) {
+            await updatePosition(existingBtcCore.id, {
+              status: "closed",
+              quantity: "0",
+              exitPrice: btcPrice.toString(),
+              exitTime: new Date(),
+              exitReason: `regime=${regime} dca_out drained`,
+            });
+          } else {
+            // Entry price is unchanged on partial sell — represents the
+            // weighted-average cost basis of remaining BTC.
+            await updatePosition(existingBtcCore.id, {
+              quantity: newQty.toString(),
+            });
+          }
+        }
+      }
+
       await logBtcCoreDecision(ctx, decision, regime, {
         order: order.coinbaseOrderId,
         deltaUsd: -sellUsd,
@@ -634,6 +710,7 @@ async function executeBtcCoreAction(
       return {
         kind: "placed",
         orderId: order.coinbaseOrderId,
+        positionId: existingBtcCore?.id,
         sizeUsd: sellUsd,
         price: btcPrice,
       };
