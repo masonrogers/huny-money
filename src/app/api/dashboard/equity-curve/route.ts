@@ -1,4 +1,4 @@
-import { and, eq, gte, asc } from "drizzle-orm";
+import { and, eq, gte, asc, desc } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { systemStateHistory, priceSnapshots } from "@/lib/db/schema";
 import { stateRead } from "@/lib/db/utils";
@@ -51,7 +51,26 @@ export async function GET(request: Request) {
       const mode: "paper" | "live" = paperMode ? "paper" : "live";
       const suffix = mode;
       const equityKey = `last_equity_${suffix}_usd`;
-      const since = new Date(Date.now() - days * 86_400_000);
+      const startingCapKey = `starting_capital_${suffix}_usd`;
+      const requestedSince = new Date(Date.now() - days * 86_400_000);
+
+      // Anchor: equity curve starts from the most recent reset/re-anchor
+      // event. Otherwise the chart would include pre-reset history (a
+      // different paper "account" entirely) and render as a flat line near
+      // zero followed by a vertical spike to the new starting capital —
+      // the operator would think the bot blew up. Reset preserves audit
+      // trail per CLAUDE.md, but the curve is a UX surface that should
+      // respect the hard cut.
+      const lastAnchor = await db
+        .select({ ts: systemStateHistory.changedAt })
+        .from(systemStateHistory)
+        .where(eq(systemStateHistory.key, startingCapKey))
+        .orderBy(desc(systemStateHistory.changedAt))
+        .limit(1);
+      const since =
+        lastAnchor[0] && lastAnchor[0].ts > requestedSince
+          ? lastAnchor[0].ts
+          : requestedSince;
 
       const [equityRows, btcRows, startingCapital, btcAtStart] = await Promise.all([
         db

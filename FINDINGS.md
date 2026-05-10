@@ -114,6 +114,19 @@ Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for th
 - **Fix (`039eb48`+):** Added regime persistence at the end of `runScheduledMorningBrief()`. Reads previous regime + days, writes new regime, increments days (or resets to 1 on change), updates `last_regime_change_at` if changed. All writes get `relatedEvalId` so the audit trail can trace which brief triggered each.
 - **Why missed:** No test asserts that after a brief, `state.current_regime` matches the brief's classification. The orchestration layer's tests focus on order placement, not state-side-effects of brief output.
 
+### 16. Equity curve includes pre-reset history — chart looks like a catastrophic crash + recovery
+- **File:** `src/app/api/dashboard/equity-curve/route.ts`
+- **Severity:** UX/operator-trust HIGH. Functionally cosmetic but the operator's confidence depends on a clean equity chart.
+- **Cause:** `reset-paper` preserves the audit trail (per CLAUDE.md / `system_state_history` design). Equity curve queries `last_equity_paper_usd` writes from history, going back `days` (default 30). After a reset, the query happily returns the pre-reset values — which were from a totally different paper "account."
+- **Symptom:** 601 points returned post-reset. 573 of them showed `equity: $0.26` (3 days of stale data from before today's reset), then 28 points jumped to `$10,000+`. Chart would render as a flat line near zero for 3 days followed by a vertical spike — the operator would assume the bot lost all the money and only just recovered.
+- **Fix:** Anchor the curve from the most recent `starting_capital_paper_usd` write timestamp in `system_state_history`. The operator-visible chart respects the hard cut even though the underlying audit trail doesn't.
+- **Found by:** Spot-checking dashboard endpoints during the iteration loop.
+
+### 17. (FALSE ALARM) Wakeup cycle apparently dead post-deploy
+- **Initially flagged as:** No wakeup activity in `/api/dashboard/overview` after 13+ min and the wallet endpoint showing stale `$10k` cash.
+- **Resolution:** Wakeup IS running. The dashboard's `recentActivity` only shows wake-up TRIGGER fires (position move, stop fill, news keyword) from the `wakeups` table — it does not show wakeup CYCLE ticks. With no held positions hitting >5% moves and watch-list keywords not matching news, the cycle runs silently. Subsequent re-check showed the wallet now updated correctly.
+- **Lesson for future debugging:** "no wakeup row" ≠ "no cycle running". Confirm by checking `last_equity_paper_usd` actually changes over time.
+
 ## Stylistic findings (downgraded to warning)
 
 ### 8. `react-hooks/set-state-in-effect` — 7 warnings remaining
