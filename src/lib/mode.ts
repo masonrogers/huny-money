@@ -14,25 +14,34 @@
 
 export type Mode = "paper" | "live";
 
-let currentMode: Mode | null = null;
+// Hoisted to globalThis so it survives Next.js App Router bundle splitting.
+// See note in src/lib/execution/factory.ts.
+const GLOBAL_KEY = "__hunyMoneyMode" as const;
+type GlobalSlot = { value: Mode | null };
+function slot(): GlobalSlot {
+  const g = globalThis as unknown as Record<string, GlobalSlot | undefined>;
+  if (!g[GLOBAL_KEY]) g[GLOBAL_KEY] = { value: null };
+  return g[GLOBAL_KEY]!;
+}
 
 export function setCurrentMode(mode: Mode): void {
-  currentMode = mode;
+  slot().value = mode;
 }
 
 export function getCurrentMode(): Mode {
-  if (currentMode === null) {
+  const v = slot().value;
+  if (v === null) {
     throw new Error(
       "getCurrentMode() called before mode was initialized. " +
         "Mode must be loaded at boot via setCurrentMode(). " +
         "If you're in a test, call setCurrentModeForTesting('paper'|'live') in setup.",
     );
   }
-  return currentMode;
+  return v;
 }
 
 export function setCurrentModeForTesting(mode: Mode | null): void {
-  currentMode = mode;
+  slot().value = mode;
 }
 
 export function isPaperMode(): boolean {

@@ -22,7 +22,18 @@ import type { OrderExecutor } from "./interface";
  * (the operator's pending toggle has now taken effect).
  */
 
-let constructedExecutor: OrderExecutor | null = null;
+// Singleton storage hoisted to globalThis so it survives Next.js App Router
+// bundle splitting. Module-scope `let` is per-bundle; instrumentation and
+// API route handlers can end up with different copies of this module, each
+// with its own null. globalThis is shared across all bundles in the same
+// Node process — same pattern Drizzle/Prisma use.
+const GLOBAL_KEY = "__hunyMoneyExecutor" as const;
+type GlobalSlot = { value: OrderExecutor | null };
+function slot(): GlobalSlot {
+  const g = globalThis as unknown as Record<string, GlobalSlot | undefined>;
+  if (!g[GLOBAL_KEY]) g[GLOBAL_KEY] = { value: null };
+  return g[GLOBAL_KEY]!;
+}
 
 export interface BootExecutorResult {
   executor: OrderExecutor;
@@ -30,7 +41,8 @@ export interface BootExecutorResult {
 }
 
 export async function bootConstructExecutor(): Promise<BootExecutorResult> {
-  if (constructedExecutor != null) {
+  const s = slot();
+  if (s.value != null) {
     throw new Error(
       "bootConstructExecutor() called twice in the same session. The executor " +
         "is constructed exactly once at boot. If you need to reset for tests, " +
@@ -48,16 +60,16 @@ export async function bootConstructExecutor(): Promise<BootExecutorResult> {
   setCurrentMode(mode);
 
   if (mode === "paper") {
-    constructedExecutor = PaperExecutor.__constructFromFactory(
+    s.value = PaperExecutor.__constructFromFactory(
       PaperExecutor.__factoryConstructKey,
     );
   } else {
-    constructedExecutor = LiveExecutor.__constructFromFactory(
+    s.value = LiveExecutor.__constructFromFactory(
       LiveExecutor.__factoryConstructKey,
     );
   }
 
-  return { executor: constructedExecutor, mode };
+  return { executor: s.value, mode };
 }
 
 /**
@@ -66,16 +78,17 @@ export async function bootConstructExecutor(): Promise<BootExecutorResult> {
  * code paths go through boot.
  */
 export function getExecutor(): OrderExecutor {
-  if (!constructedExecutor) {
+  const v = slot().value;
+  if (!v) {
     throw new Error(
       "getExecutor(): executor has not been constructed. bootConstructExecutor() " +
         "must be called once at boot before any code path attempts to place orders.",
     );
   }
-  return constructedExecutor;
+  return v;
 }
 
 /** Tests-only: replace the singleton (or clear it). */
 export function __resetExecutorForTesting(replacement?: OrderExecutor | null): void {
-  constructedExecutor = replacement ?? null;
+  slot().value = replacement ?? null;
 }
