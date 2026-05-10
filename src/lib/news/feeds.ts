@@ -23,14 +23,15 @@ export const FEEDS: readonly NewsFeed[] = [
     name: "The Block",
     url: "https://www.theblock.co/rss.xml",
   },
-  // Reuters crypto coverage — confirm URL at deploy time, may shift.
+  // Cointelegraph (replaced Reuters Crypto — Reuters' arc URL has been 404
+  // since at least 2026-05; was generating a warning every wake-up tick).
   {
-    id: "reuters-crypto",
-    name: "Reuters Crypto",
-    url: "https://www.reuters.com/arc/outboundfeeds/v3/category/crypto/?outputType=xml",
+    id: "cointelegraph",
+    name: "Cointelegraph",
+    url: "https://cointelegraph.com/rss",
   },
-  // Bloomberg Crypto. Bloomberg often paywalls RSS; fallback to Decrypt or
-  // CoinTelegraph if needed.
+  // Bloomberg Crypto. Bloomberg often paywalls RSS; Decrypt is the chosen
+  // fallback.
   {
     id: "decrypt",
     name: "Decrypt",
