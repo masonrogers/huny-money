@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   evaluatePreflight,
   initialStopPrice,
+  nextTrailingStopPrice,
+  partialSellQuantity,
   quantityFor,
 } from "@/lib/orchestration/decision-executor";
 
@@ -98,5 +100,81 @@ describe("initialStopPrice", () => {
   it("matches the schema's allowed range (4-20%)", () => {
     expect(initialStopPrice(100, 4)).toBe(96);
     expect(initialStopPrice(100, 20)).toBe(80);
+  });
+});
+
+describe("nextTrailingStopPrice", () => {
+  // Schedule: +25%→entry, +50%→+20%, +75%→+40%, +100%→+65%
+  it("returns null below the +25% trigger (no schedule applies yet)", () => {
+    // Profit = +20%, no upgrade
+    expect(nextTrailingStopPrice(100, 120, null)).toBeNull();
+    expect(nextTrailingStopPrice(100, 120, 88)).toBeNull();
+  });
+
+  it("ratchets to entry at +25%", () => {
+    // Profit = +25%, schedule says stop at breakeven (entry)
+    const r = nextTrailingStopPrice(100, 125, 88);
+    expect(r).toBeCloseTo(100, 6);
+  });
+
+  it("ratchets to +20% at the +50% tier", () => {
+    const r = nextTrailingStopPrice(100, 150, 100);
+    expect(r).toBeCloseTo(120, 6);
+  });
+
+  it("ratchets to +65% at the +100% tier", () => {
+    const r = nextTrailingStopPrice(100, 200, 140);
+    expect(r).toBeCloseTo(165, 6);
+  });
+
+  it("never downgrades — returns null when current stop is already at/above schedule", () => {
+    // Profit at +50% says stop should be +20% = 120. Current stop is 130.
+    expect(nextTrailingStopPrice(100, 150, 130)).toBeNull();
+    // Profit at +100% says stop should be +65% = 165. Current stop equals.
+    expect(nextTrailingStopPrice(100, 200, 165)).toBeNull();
+  });
+
+  it("upgrades from null current stop once schedule applies", () => {
+    expect(nextTrailingStopPrice(100, 130, null)).toBeCloseTo(100, 6);
+  });
+
+  it("guards against bad inputs", () => {
+    expect(nextTrailingStopPrice(0, 130, null)).toBeNull();
+    expect(nextTrailingStopPrice(100, 0, null)).toBeNull();
+    expect(nextTrailingStopPrice(Number.NaN, 130, null)).toBeNull();
+  });
+
+  it("uses the highest cleared tier (not the lowest)", () => {
+    // Profit = +90% — clears +25, +50, +75 but not +100. Should pick +75 → +40%.
+    const r = nextTrailingStopPrice(100, 190, 130);
+    expect(r).toBeCloseTo(140, 6);
+  });
+});
+
+describe("partialSellQuantity", () => {
+  it("sells 1/3 of the original quantity on the first call", () => {
+    expect(partialSellQuantity(300, 0)).toBeCloseTo(100, 6);
+  });
+
+  it("sells another 1/3 of original on the second call", () => {
+    // After 100 sold, remaining is 200; tranche is still 100 of original.
+    expect(partialSellQuantity(300, 100)).toBeCloseTo(100, 6);
+  });
+
+  it("sells the remaining quantity if less than 1/3 of original is left", () => {
+    // After 250 sold, only 50 remains — return 50, not 100.
+    expect(partialSellQuantity(300, 250)).toBeCloseTo(50, 6);
+  });
+
+  it("returns 0 when nothing remains", () => {
+    expect(partialSellQuantity(300, 300)).toBe(0);
+    expect(partialSellQuantity(300, 350)).toBe(0); // over-sold; defensive
+  });
+
+  it("guards against bad inputs", () => {
+    expect(partialSellQuantity(0, 0)).toBe(0);
+    expect(partialSellQuantity(-100, 0)).toBe(0);
+    expect(partialSellQuantity(300, -10)).toBe(0);
+    expect(partialSellQuantity(Number.NaN, 0)).toBe(0);
   });
 });

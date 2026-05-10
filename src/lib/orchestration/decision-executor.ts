@@ -1,16 +1,27 @@
 import { stateRead, stateWriter, appDecisionLogger, errorLogger } from "@/lib/db/utils";
-import { insertPosition, openPositionsForCurrentMode } from "@/lib/db/queries/positions";
+import {
+  insertPosition,
+  openPositionsForCurrentMode,
+  updatePosition,
+} from "@/lib/db/queries/positions";
+import { filledSellQtyByPositionForCurrentMode } from "@/lib/db/queries/orders";
 import { getExecutor } from "@/lib/execution";
 import type { OrderExecutor } from "@/lib/execution/interface";
 import { altSizing, btcCoreSizing } from "@/lib/risk/position-sizing";
 import { checkAltCooldown, checkDailyLossCap, checkHardFloor } from "@/lib/risk/circuit-breakers";
-import { STRATEGY_VERSION, MIN_POSITION_SIZE_USD } from "@/lib/strategy/constants";
+import {
+  ALT_TRAILING_STOP_SCHEDULE,
+  STRATEGY_VERSION,
+  MIN_POSITION_SIZE_USD,
+} from "@/lib/strategy/constants";
 import { log } from "@/lib/logger";
 import type {
   AltEntryCandidateSchema,
+  AltPositionSchema,
   BtcCoreDecisionSchema,
   MorningBrief,
 } from "@/lib/ai/schemas";
+import type { Position } from "@/lib/db/schema";
 import type { z } from "zod";
 
 /**
@@ -19,17 +30,20 @@ import type { z } from "zod";
  * Per BUILD_PLAN.md §4D + STRATEGY.md §3.4 / §3.5. This is the missing glue
  * between the AI's planning loop and the executor's order placement.
  *
- * Scope of this iteration:
+ * Scope:
  *   - Pre-flight gates (paused / halted / hard floor / loss cap / cooldown)
  *   - Alt cycle entries from `brief.alt_entry_candidates`
  *   - BTC core dca_in / hold / exit from `brief.btc_core_decision`
+ *   - Alt position actions from `brief.alt_positions`:
+ *       hold        — no-op
+ *       trail_stop  — cancel old stop, place new one at the ratcheted level
+ *                     per ALT_TRAILING_STOP_SCHEDULE. Only ratchets UP.
+ *       partial_sell — sell min(remaining, originalQty/3) per §3.5 ladder
+ *       exit        — market sell remaining qty, mark position closed
  *
- * NOT in this iteration (tracked as separate punch-list items):
+ * NOT in this iteration:
  *   - 2-tranche laddered entries spread over 24h (we place tranche 1 at
  *     full size for now; STRATEGY.md §3.5 calls for splitting it 50/50)
- *   - Trailing stop ratcheting on existing alt positions (separate module)
- *   - Laddered cycle-high exits (1/3 + 1/3 + 1/3 over days)
- *   - alt_position actions (`trail_stop`, `partial_sell`, `exit`)
  *
  * Idempotency: each invocation checks `state.last_executed_brief_eval_id`.
  * If the same evaluation id has already been processed, the function
@@ -38,6 +52,7 @@ import type { z } from "zod";
  */
 
 type AltCandidate = z.infer<typeof AltEntryCandidateSchema>;
+type AltPositionAction = z.infer<typeof AltPositionSchema>;
 type BtcCoreDecision = z.infer<typeof BtcCoreDecisionSchema>;
 
 export interface DecisionExecutorContext {
@@ -60,6 +75,12 @@ export type DecisionOutcome =
   | { kind: "placed"; orderId: string; positionId?: string; sizeUsd: number; price: number }
   | { kind: "skipped"; reason: string };
 
+export interface AltPositionActionResult {
+  asset: string;
+  action: "hold" | "trail_stop" | "partial_sell" | "exit";
+  outcome: DecisionOutcome;
+}
+
 export interface DecisionExecutorResult {
   /** True if a fresh run executed; false if the brief was already processed. */
   ran: boolean;
@@ -67,9 +88,11 @@ export interface DecisionExecutorResult {
   shortCircuitReason?: string;
   altResults: Array<{ asset: string; outcome: DecisionOutcome }>;
   btcCoreResult: DecisionOutcome | null;
+  /** Per STRATEGY.md §3.5 — actions on existing alt positions (manage / exit). */
+  altPositionActions: AltPositionActionResult[];
   /** Aggregate notional placed (USD). For the Force Brief toast. */
   totalPlacedUsd: number;
-  /** Aggregate count of placed orders (entry + stop). */
+  /** Aggregate count of placed orders (entry + stop + ratchets + exits). */
   ordersPlacedCount: number;
 }
 
@@ -77,6 +100,7 @@ const NO_RESULT: DecisionExecutorResult = {
   ran: false,
   altResults: [],
   btcCoreResult: null,
+  altPositionActions: [],
   totalPlacedUsd: 0,
   ordersPlacedCount: 0,
 };
@@ -146,6 +170,71 @@ export function initialStopPrice(entryPrice: number, stopPct: number): number {
   return entryPrice * (1 - stopPct / 100);
 }
 
+/**
+ * Compute the next ratcheted trailing-stop price per ALT_TRAILING_STOP_SCHEDULE.
+ *
+ * STRATEGY.md §3.7:
+ *   +25% profit → stop at breakeven (entry)
+ *   +50% profit → stop at +20% (entry × 1.20)
+ *   +75% profit → stop at +40% (entry × 1.40)
+ *  +100% profit → stop at +65% (entry × 1.65)
+ *
+ * Returns the new stop only if it strictly improves on the current stop.
+ * Stops never ratchet down — a price retracement does not loosen the stop.
+ *
+ * Returns null when no upgrade is appropriate (insufficient profit or the
+ * existing stop already meets/exceeds the schedule).
+ */
+export function nextTrailingStopPrice(
+  entryPrice: number,
+  currentPrice: number,
+  currentStopPrice: number | null,
+): number | null {
+  if (!Number.isFinite(entryPrice) || entryPrice <= 0) return null;
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0) return null;
+
+  const profitPct = ((currentPrice - entryPrice) / entryPrice) * 100;
+
+  // Find the highest schedule entry whose trigger we have already cleared.
+  let scheduledStopPctFromEntry: number | null = null;
+  for (const tier of ALT_TRAILING_STOP_SCHEDULE) {
+    if (profitPct >= tier.triggerProfitPct) {
+      scheduledStopPctFromEntry = tier.stopPctFromEntry;
+    } else {
+      break; // schedule is monotonically increasing
+    }
+  }
+
+  if (scheduledStopPctFromEntry == null) return null;
+
+  const newStop = entryPrice * (1 + scheduledStopPctFromEntry / 100);
+  // Only improve. A current stop at or above the schedule's stop is good
+  // enough (might have been ratcheted earlier, or set manually).
+  if (currentStopPrice != null && currentStopPrice >= newStop) return null;
+  return newStop;
+}
+
+/**
+ * Quantity for a partial_sell tranche — 1/3 of the position's ORIGINAL
+ * quantity, capped at what's still remaining. Three calls drain the position;
+ * a fourth call sees 0 remaining and is a no-op.
+ *
+ * Per STRATEGY.md §3.5 the exit ladder is 1/3 + 1/3 + 1/3 across days.
+ * Tying tranche size to original (not remaining) keeps each leg the same
+ * size instead of shrinking geometrically.
+ */
+export function partialSellQuantity(
+  originalQty: number,
+  alreadySoldQty: number,
+): number {
+  if (!Number.isFinite(originalQty) || originalQty <= 0) return 0;
+  if (!Number.isFinite(alreadySoldQty) || alreadySoldQty < 0) return 0;
+  const remaining = originalQty - alreadySoldQty;
+  if (remaining <= 0) return 0;
+  const oneTranche = originalQty / 3;
+  return Math.min(remaining, oneTranche);
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -198,12 +287,17 @@ export async function executeBriefDecisions(
 
   const executor = getExecutor();
 
-  // Snapshot existing positions so we don't double-enter.
-  const openPositions = await openPositionsForCurrentMode();
-  const openByAsset = new Map<string, true>();
-  for (const p of openPositions) openByAsset.set(p.asset.toUpperCase(), true);
+  // Snapshot existing positions so we don't double-enter and so position
+  // actions can find their target quickly.
+  const [openPositions, soldByPosition] = await Promise.all([
+    openPositionsForCurrentMode(),
+    filledSellQtyByPositionForCurrentMode(),
+  ]);
+  const openByAsset = new Map<string, Position>();
+  for (const p of openPositions) openByAsset.set(p.asset.toUpperCase(), p);
 
   const altResults: Array<{ asset: string; outcome: DecisionOutcome }> = [];
+  const altPositionActions: AltPositionActionResult[] = [];
   let totalPlacedUsd = 0;
   let ordersPlacedCount = 0;
 
@@ -236,6 +330,28 @@ export async function executeBriefDecisions(
     ordersPlacedCount += 1;
   }
 
+  // ── Alt position management (existing positions: hold / trail / sell) ──
+  // Position management runs even if blockAltEntries is true — the loss cap
+  // and cooldown only block NEW entries. Exits and stop ratchets stay live.
+  for (const action of brief.alt_positions) {
+    const outcome = await executeAltPositionAction(
+      executor,
+      action,
+      ctx,
+      openByAsset,
+      soldByPosition,
+    );
+    altPositionActions.push({
+      asset: action.asset.toUpperCase(),
+      action: action.action,
+      outcome,
+    });
+    if (outcome.kind === "placed") {
+      totalPlacedUsd += outcome.sizeUsd;
+      ordersPlacedCount += 1;
+    }
+  }
+
   // Mark this brief processed BEFORE returning so a crash in the caller
   // doesn't cause us to re-execute on retry.
   await stateWriter({
@@ -249,6 +365,7 @@ export async function executeBriefDecisions(
     ran: true,
     altResults,
     btcCoreResult,
+    altPositionActions,
     totalPlacedUsd,
     ordersPlacedCount,
   };
@@ -263,7 +380,7 @@ async function executeAltEntry(
   candidate: AltCandidate,
   regime: "bull" | "chop" | "bear",
   ctx: DecisionExecutorContext,
-  openByAsset: Map<string, true>,
+  openByAsset: Map<string, Position>,
 ): Promise<DecisionOutcome> {
   const asset = candidate.asset.toUpperCase();
 
@@ -518,6 +635,273 @@ async function logBtcCoreDecision(
     outputs,
     reasoning: `BTC core ${decision.action}: $${Math.abs(outputs.deltaUsd).toFixed(2)} at $${outputs.btcPrice.toFixed(2)} → target ${decision.target_alloc_pct}% of account.`,
     relatedEntity: ctx.evaluationId,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Alt position actions (existing positions: hold / trail_stop / partial_sell / exit)
+// ---------------------------------------------------------------------------
+
+async function executeAltPositionAction(
+  executor: OrderExecutor,
+  action: AltPositionAction,
+  ctx: DecisionExecutorContext,
+  openByAsset: Map<string, Position>,
+  soldByPosition: Map<string, number>,
+): Promise<DecisionOutcome> {
+  const asset = action.asset.toUpperCase();
+  const position = openByAsset.get(asset);
+
+  if (!position) {
+    return {
+      kind: "skipped",
+      reason: `no open ${asset} position to act on`,
+    };
+  }
+  if (position.type !== "alt_cycle") {
+    return {
+      kind: "skipped",
+      reason: `position ${asset} is ${position.type}, not alt_cycle`,
+    };
+  }
+
+  if (action.action === "hold") {
+    return { kind: "skipped", reason: "alt_position.action=hold" };
+  }
+
+  const price = ctx.currentPrices[asset];
+  if (price == null || !Number.isFinite(price) || price <= 0) {
+    return { kind: "skipped", reason: `no current price for ${asset}` };
+  }
+
+  const entryPrice = parseFloat(position.entryPrice);
+  const originalQty = parseFloat(position.quantity);
+  const alreadySoldQty = soldByPosition.get(position.id) ?? 0;
+  const remainingQty = originalQty - alreadySoldQty;
+
+  if (remainingQty <= 0) {
+    return {
+      kind: "skipped",
+      reason: "position fully sold; awaiting reconciliation to close row",
+    };
+  }
+
+  try {
+    if (action.action === "exit") {
+      return await handleExit(executor, asset, position, remainingQty, price, action, ctx);
+    }
+    if (action.action === "partial_sell") {
+      return await handlePartialSell(
+        executor,
+        asset,
+        position,
+        originalQty,
+        alreadySoldQty,
+        price,
+        action,
+        ctx,
+      );
+    }
+    if (action.action === "trail_stop") {
+      return await handleTrailStop(
+        executor,
+        asset,
+        position,
+        entryPrice,
+        remainingQty,
+        price,
+        action,
+        ctx,
+      );
+    }
+    return { kind: "skipped", reason: `unknown action ${action.action}` };
+  } catch (err) {
+    await errorLogger({
+      severity: "error",
+      component: "orchestration.decision-executor",
+      error: err instanceof Error ? err : new Error(String(err)),
+      context: { asset, action, positionId: position.id },
+      recovered: false,
+    });
+    return {
+      kind: "skipped",
+      reason: `${action.action} failed: ${(err as Error).message}`,
+    };
+  }
+}
+
+async function handleExit(
+  executor: OrderExecutor,
+  asset: string,
+  position: Position,
+  remainingQty: number,
+  price: number,
+  action: AltPositionAction,
+  ctx: DecisionExecutorContext,
+): Promise<DecisionOutcome> {
+  const order = await executor.placeMarketExit(asset, remainingQty, {
+    relatedPositionId: position.id,
+  });
+  // Mark the position closed immediately so subsequent briefs don't re-act
+  // on a "still open" row. Reconciliation will populate exit_price + P&L
+  // when the fill lands.
+  await updatePosition(position.id, {
+    status: "closed",
+    exitTime: new Date(),
+    exitReason: `morning_brief_exit: ${action.reasoning.slice(0, 200)}`,
+  });
+  await logAltPositionAction(ctx, position, action, {
+    order: order.coinbaseOrderId,
+    sellQty: remainingQty,
+    price,
+  });
+  log.info("Alt position exit placed", {
+    asset,
+    positionId: position.id,
+    qty: remainingQty,
+    price,
+  });
+  return {
+    kind: "placed",
+    orderId: order.coinbaseOrderId,
+    positionId: position.id,
+    sizeUsd: remainingQty * price,
+    price,
+  };
+}
+
+async function handlePartialSell(
+  executor: OrderExecutor,
+  asset: string,
+  position: Position,
+  originalQty: number,
+  alreadySoldQty: number,
+  price: number,
+  action: AltPositionAction,
+  ctx: DecisionExecutorContext,
+): Promise<DecisionOutcome> {
+  const sellQty = partialSellQuantity(originalQty, alreadySoldQty);
+  if (sellQty <= 0) {
+    return { kind: "skipped", reason: "no remaining quantity to partial-sell" };
+  }
+  const order = await executor.placeMarketExit(asset, sellQty, {
+    relatedPositionId: position.id,
+  });
+  // Don't close the position — there's still remaining quantity (or one
+  // tranche just left). The next brief decides whether to continue laddering.
+  await logAltPositionAction(ctx, position, action, {
+    order: order.coinbaseOrderId,
+    sellQty,
+    price,
+  });
+  log.info("Alt position partial_sell placed", {
+    asset,
+    positionId: position.id,
+    sellQty,
+    remainingAfter: originalQty - alreadySoldQty - sellQty,
+    price,
+  });
+  return {
+    kind: "placed",
+    orderId: order.coinbaseOrderId,
+    positionId: position.id,
+    sizeUsd: sellQty * price,
+    price,
+  };
+}
+
+async function handleTrailStop(
+  executor: OrderExecutor,
+  asset: string,
+  position: Position,
+  entryPrice: number,
+  remainingQty: number,
+  price: number,
+  action: AltPositionAction,
+  ctx: DecisionExecutorContext,
+): Promise<DecisionOutcome> {
+  const currentStop = position.stopPrice ? parseFloat(position.stopPrice) : null;
+  const newStop = nextTrailingStopPrice(entryPrice, price, currentStop);
+  if (newStop == null) {
+    return {
+      kind: "skipped",
+      reason:
+        currentStop != null
+          ? `no ratchet upgrade (current stop $${currentStop.toFixed(4)} already at or above schedule)`
+          : "insufficient profit to trigger schedule",
+    };
+  }
+
+  // Cancel the prior stop on the exchange (best-effort — paper executor is
+  // a no-op cancel; live executor's reconciliation handles partial failures).
+  if (position.stopOrderId) {
+    try {
+      await executor.cancelOrder(position.stopOrderId);
+    } catch (err) {
+      // Don't abort: an old stop that failed to cancel will at worst
+      // double-stop the position — the new stop is tighter and fills first.
+      await errorLogger({
+        severity: "warning",
+        component: "orchestration.decision-executor",
+        error: err instanceof Error ? err : new Error(String(err)),
+        context: { asset, positionId: position.id, oldStopOrderId: position.stopOrderId },
+        recovered: true,
+        recoveryAction: "Continuing with new stop placement.",
+      });
+    }
+  }
+
+  const stopLimitPrice = newStop * 0.995; // a hair below trigger to ensure marketability
+  const order = await executor.placeStopLimit(asset, newStop, stopLimitPrice, remainingQty, {
+    relatedPositionId: position.id,
+  });
+
+  await updatePosition(position.id, {
+    stopPrice: newStop.toString(),
+    stopOrderId: order.coinbaseOrderId,
+  });
+
+  await logAltPositionAction(ctx, position, action, {
+    order: order.coinbaseOrderId,
+    newStop,
+    oldStop: currentStop,
+    price,
+  });
+  log.info("Alt position trail_stop placed", {
+    asset,
+    positionId: position.id,
+    oldStop: currentStop,
+    newStop,
+    currentPrice: price,
+  });
+  return {
+    kind: "placed",
+    orderId: order.coinbaseOrderId,
+    positionId: position.id,
+    sizeUsd: remainingQty * price,
+    price: newStop,
+  };
+}
+
+async function logAltPositionAction(
+  ctx: DecisionExecutorContext,
+  position: Position,
+  action: AltPositionAction,
+  outputs: Record<string, unknown>,
+): Promise<void> {
+  await appDecisionLogger({
+    decisionType: "order_routing",
+    inputs: {
+      evaluationId: ctx.evaluationId,
+      action,
+      positionId: position.id,
+      asset: position.asset,
+      entryPrice: parseFloat(position.entryPrice),
+      currentPrice: ctx.currentPrices[position.asset.toUpperCase()] ?? null,
+    },
+    outputs,
+    reasoning: `Alt position ${action.action} on ${position.asset}: ${action.reasoning.slice(0, 220)}`,
+    relatedEntity: position.id,
   });
 }
 

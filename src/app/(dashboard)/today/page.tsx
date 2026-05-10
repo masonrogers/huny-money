@@ -184,7 +184,11 @@ export default function TodaysPlanPage() {
                           {a.asset}
                         </Badge>
                         <span className="text-xs text-[var(--color-text-muted)] tnum">
-                          {a.kind === "btc_core" ? "BTC core" : "alt entry"}
+                          {a.kind === "btc_core"
+                            ? "BTC core"
+                            : a.kind === "alt_position"
+                              ? `alt ${a.subAction ?? "action"}`
+                              : "alt entry"}
                           {a.sizeUsd != null && ` · $${a.sizeUsd.toFixed(2)}`}
                           {a.price != null && ` @ $${a.price.toFixed(a.price < 1 ? 4 : 2)}`}
                         </span>

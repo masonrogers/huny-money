@@ -14,21 +14,23 @@ export async function POST() {
       return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
     }
     const ex = result.execution;
-    const placedCount = ex.altResults.filter((r) => r.outcome.kind === "placed").length;
-    const skippedCount = ex.altResults.filter((r) => r.outcome.kind === "skipped").length;
+    const entryPlaced = ex.altResults.filter((r) => r.outcome.kind === "placed").length;
+    const entrySkipped = ex.altResults.filter((r) => r.outcome.kind === "skipped").length;
+    const mgmtPlaced = ex.altPositionActions.filter((r) => r.outcome.kind === "placed").length;
     const btcPiece =
       ex.btcCoreResult?.kind === "placed"
         ? ` · BTC core ${ex.btcCoreResult.sizeUsd >= 0 ? "+" : ""}$${Math.abs(ex.btcCoreResult.sizeUsd).toFixed(0)}`
         : "";
-    const altPiece =
-      placedCount > 0 || skippedCount > 0
-        ? ` · alts: ${placedCount} placed, ${skippedCount} skipped`
+    const altEntryPiece =
+      entryPlaced > 0 || entrySkipped > 0
+        ? ` · entries: ${entryPlaced} placed, ${entrySkipped} skipped`
         : "";
+    const altMgmtPiece = mgmtPlaced > 0 ? ` · ${mgmtPlaced} position action(s)` : "";
     const shortCircuitPiece = ex.shortCircuitReason ? ` · execution skipped (${ex.shortCircuitReason})` : "";
 
     return NextResponse.json({
       ok: true,
-      message: `Morning brief complete · regime=${result.brief.regime} · $${result.costUsd.toFixed(4)}${altPiece}${btcPiece}${shortCircuitPiece}`,
+      message: `Morning brief complete · regime=${result.brief.regime} · $${result.costUsd.toFixed(4)}${altEntryPiece}${altMgmtPiece}${btcPiece}${shortCircuitPiece}`,
       evaluationId: result.evaluationId,
       execution: ex,
     });
