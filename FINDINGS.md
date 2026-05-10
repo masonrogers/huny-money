@@ -1,8 +1,51 @@
-# CI rollout findings
+# CI rollout + first-real-exercise findings
 
-Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for the first time. Each entry: where, what, severity, and disposition.
+Two-phase document: (a) the CI pipeline we built and why, (b) every bug it surfaced, plus every bug found by force-iterating the deployed bot afterward. 30 distinct findings as of session 2026-05-10.
+
+## Part 0: What we built (CI pipeline design)
+
+**Starting state:** repo had zero CI. All checks lived as manual scripts (`npm run typecheck`, `npm test`, `npm run lint:queries`). They worked but nothing enforced them on pushes/PRs. The `npm run lint` script was silently broken since the Next 16 upgrade — failing with a misleading error message that looked like a path issue, so nobody had run lint in months.
+
+**What we considered for CI host:**
+- GitHub Actions ✓ (chosen — native to repo, free, easy Postgres service container)
+- DO App Platform pre-deploy hook (rejected — would need a separate paid managed Postgres for CI integration tests)
+- Husky-only local hooks (rejected — no enforcement on PRs, no scheduled smoke automation)
+
+**What we considered for the deploy step:**
+- CI auto-deploys on green main via `force_build` API call (rejected after operator pushback — would put `DO_API_KEY_WRITE` in GitHub Secrets, violating the "secrets stay local" policy)
+- DO auto-deploy from main (chosen as default — already enabled, sometimes flaky)
+- Manual `bash scripts/deploy.sh` from operator's machine (chosen as fallback — reads `~/Desktop/.nibbles-secrets` locally)
+
+**What we considered for live-API smoke tests:**
+- `.github/workflows/smoke.yml` running `RUN_LIVE_SMOKE=1 npm test -- coinbase-smoke` on a weekly cron (rejected after operator pushback — would put Coinbase + Anthropic API keys in GitHub Secrets)
+- Local-only invocation when wanted (chosen — operator runs `RUN_LIVE_SMOKE=1 npm test -- coinbase-smoke` on their PC; `smoke.yml` was deleted)
+
+**Final pipeline (`.github/workflows/ci.yml`, ~1m30s on cold cache):**
+
+| Stage | Job | Purpose |
+|---|---|---|
+| 1 (parallel) | typecheck | `tsc --noEmit` |
+| 1 | lint | `eslint .` (rewrote eslint.config.mjs to native flat config — old FlatCompat shim was crashing on a circular reference) |
+| 1 | lint-queries | `bash scripts/lint-queries.sh` — enforces paper/live mode isolation + coinbase/orders import isolation |
+| 1 | unit-tests | 256 tests, no DB |
+| 2 | build | Next 16 + Turbopack with stub envs (lazy-init lets it complete without real DB / Coinbase / Anthropic) |
+| 3 | integration-tests | Postgres 16 service container + `RUN_INTEGRATION=1` (30 tests covering state-writer atomicity, paper-mode isolation, mode transition, btc-underperformance gate, circuit breakers) |
+
+**Local hooks (husky):** pre-commit runs `lint-staged` (eslint --fix on staged ts/tsx) + `lint:queries`; pre-push runs `typecheck` + `npm test`. Catches ~80% of CI-breakers before push.
+
+**Repo secrets required: zero.** This is the policy contract — CI is a quality gate, deploys are local.
+
+**What CI immediately caught on its first real run:**
+- `next lint` script silently broken (Next 16 removed the subcommand)
+- `eslint-config-next` needed flat-config-native rewrite
+- 14 pre-existing lint errors that broken-lint had been hiding — including a real correctness bug (`use-coinbase-ticker.ts` rebuilding the WebSocket on every parent re-render via a `useCallback` dep cycle) and a latent bug (`wakeupsByTypeSince` ignoring its `since` parameter)
+- `db/index.ts` had `ssl: "require"` hardcoded — broke any local-Postgres-based integration test environment, which CI was the first place to ever run
+
+After CI was wired and the deploy went out, force-iterating the bot in production (per operator instruction "fix the quick bugs to get into the condition to do a long term test") surfaced a further wave of bugs that CI hadn't covered — because they only manifested in real Next.js production bundles or under live API call patterns that no test was exercising. Those bugs are findings #11 onward.
 
 ---
+
+## Part 1: Bugs (with severity, cause, fix, verification)
 
 ## Real correctness bugs (fixed)
 

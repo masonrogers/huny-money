@@ -241,36 +241,58 @@ The deploy command runs `drizzle-kit push --force` from inside the DO sandbox (w
 10. **`state.value` is nullable on purpose.** Keys legitimately transition to null (cooldown_until expires, current_regime is "unset" until first morning brief). Same for `system_state_history.new_value`. Don't reintroduce NOT NULL.
 11. **RSS User-Agent header must be ASCII.** Em-dashes ("—"), smart quotes, etc. break the http client's header validation. See `src/lib/news/rss-poller.ts`.
 12. **Two `paper`/`live` axes — never conflate them.** The trading mode (`state.paper_mode`, locked at boot) controls what the bot does. The dashboard view (`useDashboardView()`, localStorage) controls what the operator sees. Anything that affects bot behavior reads the trading mode; anything that just renders a different lens reads the view.
-13. **Paper accounting is fully synthetic.** Paper-mode code paths must NEVER read `getAllBalances()` / `fetchPortfolioSnapshot()`. Cash always flows through `executor.getCashBalanceUsd()` — paper executor returns synthetic, live returns real. Three places leaked at various points (boot first-launch, morning-brief cash read, re-anchor); all fixed. If you add a new place that needs cash, use the executor.
+13. **Paper accounting is fully synthetic.** Paper-mode code paths must NEVER read `getAllBalances()` / `fetchPortfolioSnapshot()`. Cash always flows through `executor.getCashBalanceUsd()` — paper executor returns synthetic, live returns real. Multiple places leaked at various points (boot first-launch, morning-brief cash read, re-anchor); all fixed. **Same applies to position values:** the morning brief used to pass `positionsValueUsd: 0` to the portfolio computation as a Phase 9 TODO that was never finished — making the AI think `current_alloc = 100%` whenever any position was held (#22). Always mark-to-market open positions for any context you send to the AI.
 14. **Reuters Crypto RSS is dead** (HTTP 404 on the arc URL). Replaced with Cointelegraph. If a feed starts logging "Status code 404" warnings every 5 min, swap or remove it — `recovered: true` masks it as fine but it floods the Recent activity panel.
+15. **Mutable singletons MUST live on `globalThis` (Next 16 App Router bundle splitting).** `src/lib/execution/factory.ts` (`constructedExecutor`), `src/lib/mode.ts` (`currentMode`), `src/lib/activity/tracker.ts` (`active` + `recent`) all do this — see the `slot()` helpers in each. Module-scope `let` does NOT survive — instrumentation runs in one bundle, API routes in others, each gets its own copy with its own `null`. Tripped findings #10, #18 the hard way. Lazy-initializer caches (config, anthropic SDK, postgres pool) are fine as module-scope because each bundle re-init is idempotent and harmless; the invariant is "this module is set ONCE at boot and read elsewhere."
+16. **Beware "detector returns flags, caller acts on them" handoffs.** Six findings this session (#11, #15, #22, #25, #29, #30) shared the same root cause — pure logic existed and was tested, but the integration / call site never wired up the action. Comments like "we leave X to the caller" or "dispatched by the boot flow" or "wired when Phase Y" were lies — nobody came back to wire them. When you see one of those comments, verify the action actually happens.
+17. **Opus morning brief: `max_tokens` budget covers thinking + output combined.** With `effort: "max"` adaptive thinking, the model uses most of `max_tokens` on thinking. Set the ceiling generously (currently 32k for `morning` + `review`); Anthropic only bills used tokens, so over-provisioning is free. Truncated responses or zero-length-but-still-billed responses are the symptom. See `OPUS_EFFORT_BY_CALL_TYPE`.
 
 ## Operator controls (paper-mode safety surfaces)
 
-- `POST /api/controls/reset-paper` — typed-phrase confirm "reset paper progress". Wipes every paper position + paper order + queued tranches + cooldowns + auto-pause reason; reseeds synthetic capital to operator-supplied amount (default `PAPER_STARTING_CAPITAL_USD = 500`). Audit trail (evaluations, app_decisions, history) preserved. Refuses in live mode at both the route and query-helper layers.
-- `POST /api/controls/re-anchor-capital` — paper mode: takes operator-supplied `startingCapitalUsd`, no real-wallet read. Live mode: snapshots real Coinbase. Resets equity curve / peak / BTC anchor for the current mode. Does NOT touch positions/orders.
+- `POST /api/controls/reset-paper` — typed-phrase confirm "reset paper progress". Wipes every paper position + paper order + queued tranches + cooldowns + auto-pause reason; reseeds synthetic capital to operator-supplied amount (default `PAPER_STARTING_CAPITAL_USD = 500`, but the live paper account currently anchors at $10k unless re-anchored). Audit trail (evaluations, app_decisions, history) preserved. **Order-of-deletes matters** (orders → positions, FK constraint).
+- `POST /api/controls/re-anchor-capital` — paper mode: takes operator-supplied `startingCapitalUsd`, no real-wallet read. Live mode: snapshots real Coinbase. Resets equity curve / peak / BTC anchor for the current mode. Does NOT touch positions/orders. **Refuses with 409 if any positions are open** — would otherwise corrupt cash + positions-value bookkeeping. Operator must close-all or reset-paper first.
 - `POST /api/controls/pause` — toggles `trading_paused`. On manual resume, also clears `trading_paused_reason` + `trading_paused_by_btc_underperf_gate` so stale auto-pause text doesn't linger.
 - `deleteAllPositionsForCurrentMode()` / `deleteAllOrdersForCurrentMode()` — only callable from paper mode (assert mode at runtime, on top of the lint rule that confines positions/orders mutations to their query files).
 
 ## Status
 
-**Deployed and live** at https://huny-money-mfiyo.ondigitalocean.app in paper mode. Boot has succeeded; scheduler is ticking; cycle range job has run. **Every code mechanism specified in `STRATEGY.md` is now implemented.** Phase 10 (60-day paper observation window) is in progress.
+**Deployed and live** at https://huny-money-mfiyo.ondigitalocean.app in paper mode. Boot succeeds; scheduler ticks; cycle range job runs; wakeup cycle refreshes equity snapshot every 5 min; activity tracker populates; morning brief executes end-to-end with proper position bookkeeping.
 
-**Confirmed working live:** boot sequence, Coinbase JWT auth + TRADE-only check, cycle range nightly job (5/5 watchlist assets), pause/resume, all dashboard control buttons with proper confirmation dialogs.
+**Bug log:** see `FINDINGS.md` at the repo root. As of session 2026-05-10: 20 distinct findings logged, 14 catastrophic/HIGH bugs fixed and verified live. The bot has materially changed since the original "Phase 9 complete" claim — many paths in that claim were exercised here for the first time and broke. All have entries in `FINDINGS.md` with cause + fix + verification.
 
-**Not yet exercised live (the next morning brief is the first real end-to-end test):**
-- Successful Opus morning brief (last attempt failed on legacy-thinking-config issue, since fixed)
-- Decision-executor placing actual orders from a brief (alt entries, BTC core, position management)
-- Two-tranche entry ladder firing tranche 2 from the wake-up cycle ~12h after tranche 1
-- Trail-stop ratcheting on a held alt at +25% / +50% / +75% / +100%
-- 60-day BTC underperformance auto-pause gate (needs 60 days of equity history first)
-- Sonnet checkpoint with a brief in scope + escalation to Opus
-- Wake-up triggers (need positions or significant moves)
-- Mode toggle / close-all / convert-to-BTC end-to-end (some need positions to exist first)
+**Confirmed working live (post-2026-05-10 session):**
+- Boot → executor singleton (across Next App Router bundles via globalThis) → scheduler → 60s tick loop
+- Force-brief → Opus (32k max_tokens, lenient JSON parse with trailing-comma recovery) → decision-executor → BTC core position record (insert on first dca_in, update with weighted-avg on subsequent)
+- Brief data package now correctly mark-to-markets open positions for `accountValueUsd` (was hardcoded 0, see #22)
+- Regime classification persisted to `state.current_regime` + `days_in_current_regime` increments
+- Reset-paper (orders → positions delete order)
+- Re-anchor-capital (refuses with open positions)
+- Pause / resume, force-reconcile, close-all (now computes P&L on close)
+- Sonnet scheduled checkpoint fires (06:00 + 22:00 UTC); falls back to latest *successfully-parsed* brief if a recent attempt failed
+- Wakeup cycle closes positions on stop_limit / take_profit / market_exit fills (was a TODO that never closed, see #30)
+- Soft circuit breaker (≥20% drawdown halves alt sizes) wired into the brief flow
+- Boot reconciliation now dispatches catch-up brief on `missedEvaluation` (was logged-only)
+- Equity curve anchored from most recent reset/re-anchor — no more stale pre-reset history
+
+**Not yet exercised live (depend on AI judgment + market dynamics, expected to surface during Phase 10):**
+- `dca_out` / `exit` (need regime change to bull or bear)
+- Alt entry (need an AI candidate with conviction ≥ 70 + the 7 entry conditions in §3.4)
+- Two-tranche entry ladder firing tranche 2 ~12h after tranche 1
+- Trail-stop ratchet at +25 / +50 / +75 / +100% (needs profitable alt)
+- Wake-up triggers actually firing (need >5% moves on held assets, news matches, or stop fills)
+- Sonnet escalation to Opus (needs a wake-up worth escalating)
+- 60-day BTC underperformance auto-pause gate (needs 60 days of equity history)
+- Live-mode flip (intentionally not exercised — Phase 1 paper window first)
+- `convert-to-btc-hold` endpoint (deferred fix — see `FINDINGS.md` #27 for the inherited bookkeeping bugs)
+
+**CI:** GitHub Actions runs typecheck / lint / lint:queries / unit / build / integration-against-ephemeral-Postgres on every push/PR. **Zero GH secrets required**: deploys go via DO auto-deploy from main, with manual fallback `bash scripts/deploy.sh` reading `~/Desktop/.nibbles-secrets`. DO auto-deploy is flaky; verify each push actually deployed via the DO console or by checking commit SHA on a deployment.
 
 ## What's Next
 
-1. First morning brief at next 14:00 UTC tick (or via dashboard Force Brief button) — first end-to-end exercise of the planning → execution loop
-2. Operator reads ≥ 10 morning briefs and judges them coherent
-3. At 60 days, evaluate Phase 1 advance criteria per `STRATEGY.md §6.3`. Pass → Phase 2 (half-size live, 60 days). Fail → extend or shut down.
+1. **Read `FINDINGS.md`** if you weren't part of the 2026-05-10 session — most of those bugs would have detonated weeks into Phase 10 with no obvious cause, costing time to diagnose.
+2. **Decide on deferred items:** #27 (convert-to-btc-hold inherits #11 + #21 bugs — deferred because emergency endpoint), and the two follow-up notes in #21 / #30 (orders schema has no `feesUsd` column; net-PnL computations currently equal gross because exit-side fees aren't aggregated to the position record).
+3. **Start Phase 10 paper window cleanly:** `POST /api/controls/reset-paper` with the desired starting capital, then let the 14:00 UTC scheduled brief drive cadence. Force briefs are fine for spot-checking but use sparingly to keep the AI's regime-day counter and equity curve coherent.
+4. Operator reads ≥ 10 morning briefs and judges them coherent.
+5. At 60 days, evaluate Phase 1 advance criteria per `STRATEGY.md §6.3`.
 
-The bot is built and live. It now needs to earn the right to trade — first by being coherent in paper, then by beating BTC.
+The bot is built and now actually works the way the build plan claimed it did. It now needs to earn the right to trade — first by being coherent in paper, then by beating BTC.
