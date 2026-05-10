@@ -123,7 +123,30 @@ The bridge from "Opus produces a brief" to "orders land in the database":
 
 Plus auth (`(auth)/login`) with JWT session cookie. Live BTC/ETH/SOL ticker in the header (Coinbase Exchange WS). Cmd+K command palette for navigation + actions. Sonner toasts for state changes (paused, resumed, mode-change-pending banner). Framer Motion page transitions.
 
-**Operator preferences (active):** frontend is max-effort, total visibility (every AI call + app decision + state change inspectable from dashboard), paper mode isolation, API cost is subsidized.
+### Dashboard view toggle (cosmetic — NOT trading mode)
+
+There are TWO independent "paper vs live" axes; do not confuse them:
+
+1. **Trading mode** (`state.paper_mode`) — what the bot DOES. Locked to the executor at boot. Toggle requires typed-phrase confirmation + Phase 1 criteria + a restart.
+2. **Dashboard view** — what the operator SEES. Pure UX preference, persisted to localStorage. Defaults to whatever the trading mode is. Toggle is on every page header. Has zero side effects on bot behavior.
+
+The view context is `src/lib/contexts/dashboard-view.tsx` (`useDashboardView()` hook). Two values: `"paper"` | `"coinbase"`. When the operator's view differs from the bot's actual trading mode, an amber "Bot trades [mode]" chip appears next to the toggle so the distinction is impossible to miss.
+
+**View-aware pages** (swap content based on view):
+- Overview: title + metric grid + equity curve (paper) ↔ Coinbase wallet card; open-positions card (paper) ↔ wallet-holdings summary
+- Positions: bot paper positions (paper) ↔ real Coinbase holdings table sorted by value with % of wallet column
+
+**View-agnostic pages** (bot-internal, identical regardless of view): Today's Plan, AI Activity, Decisions, Performance, System, Controls.
+
+The header always renders both value pills (`Paper $X +Y%` and `Wallet $Z`) — the active view's pill is color-tinted; the other is dimmed.
+
+### Wallet endpoint
+
+`/api/dashboard/wallet` is the single source for the header pills + Overview wallet card + Positions Coinbase view. Returns:
+- `coinbase`: real wallet snapshot (totalUsd, cashUsd, holdings[]) — server-cached 60s to avoid hammering Coinbase. Serves last good value on transient API failures; surfaces `error` on the payload.
+- `paper`: synthetic state (equityUsd from `last_equity_paper_usd`, cashUsd, startingCapitalUsd, returnPct since paper start)
+
+**Operator preferences (active):** frontend is max-effort, total visibility (every AI call + app decision + state change inspectable from dashboard), paper mode isolation, API cost is subsidized. Portfolio value + Coinbase wallet value MUST be visible on every page (header pills); Coinbase wallet detail is one click away on Overview / Positions in coinbase view. Operator gets frustrated if the dashboard hides what should be there.
 
 ## Tests
 
@@ -199,6 +222,16 @@ The deploy command runs `drizzle-kit push --force` from inside the DO sandbox (w
 9. **DO Postgres firewall blocks operator psql.** Schema operations run inside the DO app's run_command (`drizzle-kit push --force`).
 10. **`state.value` is nullable on purpose.** Keys legitimately transition to null (cooldown_until expires, current_regime is "unset" until first morning brief). Same for `system_state_history.new_value`. Don't reintroduce NOT NULL.
 11. **RSS User-Agent header must be ASCII.** Em-dashes ("—"), smart quotes, etc. break the http client's header validation. See `src/lib/news/rss-poller.ts`.
+12. **Two `paper`/`live` axes — never conflate them.** The trading mode (`state.paper_mode`, locked at boot) controls what the bot does. The dashboard view (`useDashboardView()`, localStorage) controls what the operator sees. Anything that affects bot behavior reads the trading mode; anything that just renders a different lens reads the view.
+13. **Paper accounting is fully synthetic.** Paper-mode code paths must NEVER read `getAllBalances()` / `fetchPortfolioSnapshot()`. Cash always flows through `executor.getCashBalanceUsd()` — paper executor returns synthetic, live returns real. Three places leaked at various points (boot first-launch, morning-brief cash read, re-anchor); all fixed. If you add a new place that needs cash, use the executor.
+14. **Reuters Crypto RSS is dead** (HTTP 404 on the arc URL). Replaced with Cointelegraph. If a feed starts logging "Status code 404" warnings every 5 min, swap or remove it — `recovered: true` masks it as fine but it floods the Recent activity panel.
+
+## Operator controls (paper-mode safety surfaces)
+
+- `POST /api/controls/reset-paper` — typed-phrase confirm "reset paper progress". Wipes every paper position + paper order + queued tranches + cooldowns + auto-pause reason; reseeds synthetic capital to operator-supplied amount (default `PAPER_STARTING_CAPITAL_USD = 500`). Audit trail (evaluations, app_decisions, history) preserved. Refuses in live mode at both the route and query-helper layers.
+- `POST /api/controls/re-anchor-capital` — paper mode: takes operator-supplied `startingCapitalUsd`, no real-wallet read. Live mode: snapshots real Coinbase. Resets equity curve / peak / BTC anchor for the current mode. Does NOT touch positions/orders.
+- `POST /api/controls/pause` — toggles `trading_paused`. On manual resume, also clears `trading_paused_reason` + `trading_paused_by_btc_underperf_gate` so stale auto-pause text doesn't linger.
+- `deleteAllPositionsForCurrentMode()` / `deleteAllOrdersForCurrentMode()` — only callable from paper mode (assert mode at runtime, on top of the lint rule that confines positions/orders mutations to their query files).
 
 ## Status
 
