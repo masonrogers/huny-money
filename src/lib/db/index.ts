@@ -24,12 +24,16 @@ let cachedDb: DrizzleDb | null = null;
 
 function init(): DrizzleDb {
   if (!cachedDb) {
-    cachedClient = postgres(config.DATABASE_URL, {
+    // DigitalOcean managed Postgres requires SSL; the CI Postgres service
+    // container (used by integration tests) does not. Detect by host.
+    const url = config.DATABASE_URL;
+    const isLocal = /(?:^|@)(?:localhost|127\.0\.0\.1)(?::|\/)/.test(url);
+
+    cachedClient = postgres(url, {
       max: 10,
       idle_timeout: 20,
       connect_timeout: 10,
-      // DigitalOcean managed Postgres requires SSL
-      ssl: "require",
+      ssl: isLocal ? false : "require",
     });
     cachedDb = drizzle(cachedClient, { schema });
   }

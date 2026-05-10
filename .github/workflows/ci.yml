@@ -110,22 +110,7 @@ jobs:
       - name: Run integration tests
         run: npm test
 
-  deploy:
-    runs-on: ubuntu-latest
-    needs: [typecheck, lint, lint-queries, unit-tests, build, integration-tests]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    environment: production
-    steps:
-      - name: Trigger DigitalOcean deployment
-        env:
-          DO_API_KEY_WRITE: ${{ secrets.DO_API_KEY_WRITE }}
-        run: |
-          if [ -z "$DO_API_KEY_WRITE" ]; then
-            echo "DO_API_KEY_WRITE secret not set; skipping deploy."
-            exit 1
-          fi
-          curl -fsSL -X POST \
-            -H "Authorization: Bearer $DO_API_KEY_WRITE" \
-            -H "Content-Type: application/json" \
-            -d '{"force_build": true}' \
-            "https://api.digitalocean.com/v2/apps/e3f67164-bc0f-481e-a17d-cb1a33c3c440/deployments"
+# CI is a quality gate only — no deploy step. Deploys are triggered locally
+# via scripts/deploy.sh (which reads ~/Desktop/.nibbles-secrets) or by
+# DigitalOcean's auto-deploy from main. The DO API key never leaves the
+# operator's machine.

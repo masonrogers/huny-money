@@ -157,16 +157,21 @@ The header always renders both value pills (`Paper $X +Y%` and `Wallet $Z`) — 
 
 ## CI
 
-GitHub Actions runs on every push/PR to `main`:
-- `.github/workflows/ci.yml` — typecheck, lint (`eslint .`), `lint:queries`, unit tests, build (with stub envs), integration tests against an ephemeral Postgres 16 service container (`RUN_INTEGRATION=1`), then deploy to DO on green main via `force_build`.
-- `.github/workflows/smoke.yml` — manual `workflow_dispatch` + Mondays 12:00 UTC cron; runs `RUN_LIVE_SMOKE=1` against real Coinbase. Has a hard guard that refuses to start if `COINBASE_API_KEY` looks like the empty key `7b288729`.
-- Local hooks (husky): pre-commit runs `lint-staged` (eslint --fix on staged ts/tsx) + `lint:queries`; pre-push runs `typecheck` + `npm test`.
+**Operator policy: secrets do not leave the local PC.** The only acceptable off-machine destination for any secret is DigitalOcean env vars (where the bot itself runs). CI is therefore a *quality gate only* — no deploy steps that need API keys, no live-API smoke tests in CI.
 
-GitHub repo secrets required:
-- `DO_API_KEY_WRITE` — to trigger the deploy job. Source: `/home/davidr/Desktop/.nibbles-secrets`.
-- `COINBASE_API_KEY` — funded key `88674a25` only, NEVER `7b288729`.
-- `COINBASE_API_SECRET` — paired with the above.
-- `ANTHROPIC_API_KEY` — for any Anthropic smoke checks (currently unused by `coinbase-smoke` but kept available).
+GitHub Actions on every push/PR to `main` (`.github/workflows/ci.yml`):
+- typecheck, lint (`eslint .`), `lint:queries`, unit tests in parallel
+- build with stub envs
+- integration tests against an ephemeral Postgres 16 service container (`RUN_INTEGRATION=1`)
+- **no deploy job** — DO auto-deploys from `main`, or the operator runs `scripts/deploy.sh` locally (which reads `~/Desktop/.nibbles-secrets`)
+
+Anything that needs real credentials runs locally:
+- Live Coinbase smoke: `RUN_LIVE_SMOKE=1 npm test -- coinbase-smoke` (needs the funded key `88674a25`, never `7b288729`)
+- DO deploy trigger: `bash scripts/deploy.sh`
+
+Local husky hooks: pre-commit runs `lint-staged` (eslint --fix on staged ts/tsx) + `lint:queries`; pre-push runs `typecheck` + `npm test`.
+
+GitHub repo requires **zero secrets** for CI to function.
 
 ## Credentials
 
