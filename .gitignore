@@ -47,3 +47,6 @@ drizzle/meta
 
 # playwright mcp artifacts
 .playwright-mcp/
+
+# claude code per-developer config
+.claude/settings.local.json
