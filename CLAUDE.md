@@ -246,6 +246,7 @@ The deploy command runs `drizzle-kit push --force` from inside the DO sandbox (w
 15. **Mutable singletons MUST live on `globalThis` (Next 16 App Router bundle splitting).** `src/lib/execution/factory.ts` (`constructedExecutor`), `src/lib/mode.ts` (`currentMode`), `src/lib/activity/tracker.ts` (`active` + `recent`) all do this — see the `slot()` helpers in each. Module-scope `let` does NOT survive — instrumentation runs in one bundle, API routes in others, each gets its own copy with its own `null`. Tripped findings #10, #18 the hard way. Lazy-initializer caches (config, anthropic SDK, postgres pool) are fine as module-scope because each bundle re-init is idempotent and harmless; the invariant is "this module is set ONCE at boot and read elsewhere."
 16. **Beware "detector returns flags, caller acts on them" handoffs.** Six findings this session (#11, #15, #22, #25, #29, #30) shared the same root cause — pure logic existed and was tested, but the integration / call site never wired up the action. Comments like "we leave X to the caller" or "dispatched by the boot flow" or "wired when Phase Y" were lies — nobody came back to wire them. When you see one of those comments, verify the action actually happens.
 17. **Opus morning brief: `max_tokens` budget covers thinking + output combined.** With `effort: "max"` adaptive thinking, the model uses most of `max_tokens` on thinking. Set the ceiling generously (currently 32k for `morning` + `review`); Anthropic only bills used tokens, so over-provisioning is free. Truncated responses or zero-length-but-still-billed responses are the symptom. See `OPUS_EFFORT_BY_CALL_TYPE`.
+18. **Adding a new schema column — also append it to `applyAdditiveMigrations`.** drizzle-kit `push --force` has hit Postgres 42P16 (`column "id" is in a primary key`, `dropconstraint_internal`) on prod the last several deploys — push silently fails to apply ANY changes (including pure column adds) once it errors. `scripts/migrate-v1-to-v3.ts` runs an `applyAdditiveMigrations()` step BEFORE drizzle-kit that issues `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` for every additive column. Add new columns there too — schema.ts alone is not enough. Type changes / index renames / FK changes still go through drizzle-kit and may need a separate plan. Diagnostic `logSchemaDiagnostic()` is currently active to identify the prod-DB drift causing the 42P16; once we know the cause and fix it, both the diagnostic and (eventually) the additive-migrations layer can be retired.
 
 ## Operator controls (paper-mode safety surfaces)
 
@@ -258,7 +259,7 @@ The deploy command runs `drizzle-kit push --force` from inside the DO sandbox (w
 
 **Deployed and live** at https://huny-money-mfiyo.ondigitalocean.app in paper mode. Boot succeeds; scheduler ticks; cycle range job runs; wakeup cycle refreshes equity snapshot every 5 min; activity tracker populates; morning brief executes end-to-end with proper position bookkeeping.
 
-**Bug log:** see `FINDINGS.md` at the repo root. As of session 2026-05-10: 20 distinct findings logged, 14 catastrophic/HIGH bugs fixed and verified live. The bot has materially changed since the original "Phase 9 complete" claim — many paths in that claim were exercised here for the first time and broke. All have entries in `FINDINGS.md` with cause + fix + verification.
+**Bug log:** see `FINDINGS.md` at the repo root. As of session 2026-05-10: 30 distinct findings logged. All HIGH/CATASTROPHIC items fixed and verified live across two follow-up sweeps. The bot has materially changed since the original "Phase 9 complete" claim — many paths in that claim were exercised here for the first time and broke. All have entries in `FINDINGS.md` with cause + fix + verification.
 
 **Confirmed working live (post-2026-05-10 session):**
 - Boot → executor singleton (across Next App Router bundles via globalThis) → scheduler → 60s tick loop
@@ -267,12 +268,14 @@ The deploy command runs `drizzle-kit push --force` from inside the DO sandbox (w
 - Regime classification persisted to `state.current_regime` + `days_in_current_regime` increments
 - Reset-paper (orders → positions delete order)
 - Re-anchor-capital (refuses with open positions)
-- Pause / resume, force-reconcile, close-all (now computes P&L on close)
+- Pause / resume, force-reconcile, close-all (now computes P&L on close, with ticker-fallback exitPrice for paper-mode pending fills)
 - Sonnet scheduled checkpoint fires (06:00 + 22:00 UTC); falls back to latest *successfully-parsed* brief if a recent attempt failed
-- Wakeup cycle closes positions on stop_limit / take_profit / market_exit fills (was a TODO that never closed, see #30)
+- Wakeup cycle closes positions on stop_limit / take_profit / market_exit fills (canonical close path, aggregates entry+exit fees)
 - Soft circuit breaker (≥20% drawdown halves alt sizes) wired into the brief flow
 - Boot reconciliation now dispatches catch-up brief on `missedEvaluation` (was logged-only)
 - Equity curve anchored from most recent reset/re-anchor — no more stale pre-reset history
+- `orders.feesUsd` column persisted on every paper-executor fill; `sumFilledOrderFeesForPositionForCurrentMode` aggregates entry+exit fees on every close path (close-all, decision-executor BTC + alt exits, wakeup-cycle, convert-to-btc-hold)
+- `convert-to-btc-hold` now closes prior positions with full P&L AND inserts a `btc_core` position row backing the BTC buy (FINDINGS #27)
 
 **Not yet exercised live (depend on AI judgment + market dynamics, expected to surface during Phase 10):**
 - `dca_out` / `exit` (need regime change to bull or bear)
@@ -283,14 +286,15 @@ The deploy command runs `drizzle-kit push --force` from inside the DO sandbox (w
 - Sonnet escalation to Opus (needs a wake-up worth escalating)
 - 60-day BTC underperformance auto-pause gate (needs 60 days of equity history)
 - Live-mode flip (intentionally not exercised — Phase 1 paper window first)
-- `convert-to-btc-hold` endpoint (deferred fix — see `FINDINGS.md` #27 for the inherited bookkeeping bugs)
+- `convert-to-btc-hold` endpoint (now book-clean per #27 fix; remains an emergency one-shot — fired at most once in the bot's lifetime)
+- Live-mode `orders.feesUsd` population (column exists; live-executor needs a reconciliation step to write Coinbase fees on fill — deferred until Phase 2)
 
 **CI:** GitHub Actions runs typecheck / lint / lint:queries / unit / build / integration-against-ephemeral-Postgres on every push/PR. **Zero GH secrets required**: deploys go via DO auto-deploy from main, with manual fallback `bash scripts/deploy.sh` reading `~/Desktop/.nibbles-secrets`. DO auto-deploy is flaky; verify each push actually deployed via the DO console or by checking commit SHA on a deployment.
 
 ## What's Next
 
 1. **Read `FINDINGS.md`** if you weren't part of the 2026-05-10 session — most of those bugs would have detonated weeks into Phase 10 with no obvious cause, costing time to diagnose.
-2. **Decide on deferred items:** #27 (convert-to-btc-hold inherits #11 + #21 bugs — deferred because emergency endpoint), and the two follow-up notes in #21 / #30 (orders schema has no `feesUsd` column; net-PnL computations currently equal gross because exit-side fees aren't aggregated to the position record).
+2. **Pull the schema-diagnostic output from the next deploy log** (committed in `147eced`) and identify the prod-DB drift causing drizzle-kit's 42P16 redefine attempts. Once known, fix the schema or add a corrective ALTER and remove the diagnostic. The additive-migrations layer (`applyAdditiveMigrations` in the migrate script) stays regardless — it's belt-and-braces.
 3. **Start Phase 10 paper window cleanly:** `POST /api/controls/reset-paper` with the desired starting capital, then let the 14:00 UTC scheduled brief drive cadence. Force briefs are fine for spot-checking but use sparingly to keep the AI's regime-day counter and equity curve coherent.
 4. Operator reads ≥ 10 morning briefs and judges them coherent.
 5. At 60 days, evaluate Phase 1 advance criteria per `STRATEGY.md §6.3`.
