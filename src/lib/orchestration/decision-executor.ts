@@ -673,24 +673,37 @@ async function executeBtcCoreAction(
       const order = await executor.placeMarketExit("BTC", qty);
 
       // Update the btc_core position record. Decrement qty (or close on exit).
+      // On close (exit OR dca_out drained), populate gross / net P&L so the
+      // dashboard's closed-trade metrics aren't all-null.
       if (existingBtcCore) {
+        const entryPrice = parseFloat(existingBtcCore.entryPrice);
+        const exitFees = order.feesUsd ?? 0;
         if (decision.action === "exit") {
+          const fullQty = parseFloat(existingBtcCore.quantity);
+          const grossPnl = (btcPrice - entryPrice) * fullQty;
           await updatePosition(existingBtcCore.id, {
             status: "closed",
             exitPrice: btcPrice.toString(),
             exitTime: new Date(),
             exitReason: `regime=${regime} exit`,
+            grossPnlUsd: grossPnl.toString(),
+            feesUsd: exitFees.toString(),
+            netPnlUsd: (grossPnl - exitFees).toString(),
           });
         } else {
           const oldQty = parseFloat(existingBtcCore.quantity);
           const newQty = Math.max(0, oldQty - qty);
           if (newQty <= 0) {
+            const grossPnl = (btcPrice - entryPrice) * oldQty;
             await updatePosition(existingBtcCore.id, {
               status: "closed",
               quantity: "0",
               exitPrice: btcPrice.toString(),
               exitTime: new Date(),
               exitReason: `regime=${regime} dca_out drained`,
+              grossPnlUsd: grossPnl.toString(),
+              feesUsd: exitFees.toString(),
+              netPnlUsd: (grossPnl - exitFees).toString(),
             });
           } else {
             // Entry price is unchanged on partial sell — represents the

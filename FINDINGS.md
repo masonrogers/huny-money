@@ -154,6 +154,22 @@ Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for th
 - **Fix:** Bumped morning brief + review (both use `effort: "max"`) from 16k → 32k. Anthropic only bills used tokens, so the higher ceiling is free when not needed but rescues briefs that need to think hard AND produce a long structured response.
 - **Why this wasn't caught earlier:** The bot has only EVER produced a successful brief in production today (per CLAUDE.md "Status" — previous attempts failed on the legacy thinking config). The first few succeeded under 16k by chance; once the AI's reasoning got more thorough (after the regime persistence + position management deploys gave it richer context), it ran out of headroom.
 - **Future-proofing:** Should also surface `stop_reason` from the Anthropic response in error logs so this is identifiable from logs alone, not just symptom analysis. Filed as a follow-up consideration.
+- **Verified live** (deploy `2bc2660`): force-brief returned `ok: true`, regime=chop, parsed=True, responseLen=4312, cost=$0.33. Within similar cost band as previous successful briefs — the higher ceiling cost nothing.
+
+### 21. Closed positions never had P&L computed
+- **Files:** `src/app/api/controls/close-all/route.ts`, `src/lib/orchestration/decision-executor.ts` (BTC core exit + dca_out drained branches)
+- **Severity:** HIGH for Phase 1 evaluation. Without P&L on closed trades, the dashboard's `closedTradeCount`, `winRate`, `avgWinPct`, `feeDragPct`, and the entire performance retrospective are blank — the operator can't tell if the strategy is working.
+- **Symptom:** After close-all marked the test position closed, `/api/dashboard/positions` showed `exitPrice: None, grossPnl: None, netPnl: None`. CLAUDE.md says "Trade close → compute gross P&L, fees, net P&L, cost basis" but the actual close handlers were just setting `status='closed'` + `exitTime` + `exitReason`.
+- **Fix:** All three close paths now populate `exitPrice` (from the market exit's `fillPrice`), `grossPnlUsd` ((exitPrice − entryPrice) × qty), `feesUsd` (exit-side fees from the order result), and `netPnlUsd` (gross − exit fees). Note: feesUsd here is exit-only — entry-side fees are tracked per-order but not aggregated to the position record. Captured as a known small undercount; can be fixed by querying related orders' fees if it matters for Phase 1 metrics.
+
+### 22. Brief data package hardcodes positionsValueUsd to 0 — AI sees inflated current_alloc, dca_outs every brief
+- **File:** `src/lib/orchestration/morning-brief.ts` line 95 (now fixed)
+- **Severity:** CATASTROPHIC. Caught only by accident — I noticed the BTC core position quantity had halved (0.06195 → 0.03069) without my having forced a dca_out, then traced the cascade back to the source.
+- **Found by:** The 14:00 UTC scheduled brief fired (the FIRST naturally-scheduled brief of the day, not a force) and decided `action=dca_out, target=50%, current=100%` despite the actual position being 50%. The AI was correct given its inputs; its inputs were wrong.
+- **Cause:** Line 91-92 of `morning-brief.ts` had a comment from Phase 9 saying "For now we approximate position value as 'cash + 0 positions' — Phase 9's full mark-to-market loop fills this in once equity snapshots are wired." Phase 9 wired the equity snapshots but never came back to fix this call site. So `assemblePortfolioSnapshot` got `positionsValueUsd: 0` forever. Result: `currentTotalValueUsd = cashUsd + 0`, but `currentBtcCoreUsd` was computed separately from real position values. The AI saw `currentBtcCoreUsd / currentTotalValueUsd = $5000 / $5000 = 100%`, target 50%, decided sell half. **This would have happened on EVERY brief**, slowly draining BTC over weeks while the bot believed it was just hitting target.
+- **In production this would have been:** day 1 buy 50%, day 2 sell 25% to "rebalance", day 3 sell 12.5%, etc. Bleeding losses to fees while the equity curve looked stable until very late. Easy to mistake for "strategy works, allocation just keeps cycling."
+- **Fix:** Compute `positionsValueUsd` up front by mark-to-market on `openPositionsForCurrentMode()` × the same `priceMap` that's about to be sent to the AI. Pass that real number into `assemblePortfolioSnapshot`. The previously-hardcoded 0 is gone.
+- **Why missed by tests:** Tests for the brief flow mock the AI response and check execution. None of them asserted "the input given to the AI's portfolio context contains real position values."
 
 ## Stylistic findings (downgraded to warning)
 

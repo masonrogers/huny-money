@@ -88,16 +88,32 @@ async function runScheduledMorningBriefImpl(): Promise<
     const cashUsd = await executor.getCashBalanceUsd();
     const btcTicker = await getTicker("BTC-USD");
 
-    // For now we approximate position value as "cash + 0 positions" — Phase 9's
-    // full mark-to-market loop fills this in once equity snapshots are wired.
+    // Asset price data for each tracked asset (also feeds the brief's data
+    // package; we read it here too so positionsValueUsd is mark-to-market).
+    const assets = await fetchAssetData([...CORE_ASSETS, ...CYCLE_WATCHLIST]);
+
+    // Mark-to-market open positions for accurate accountValueUsd. Without
+    // this, the AI sees `currentTotalValueUsd = cash + 0` and believes
+    // positions are worth nothing, which inflates `current_alloc_pct` to
+    // ~100% (any held BTC core appears as 100% of a cash-only account).
+    // Triggers spurious dca_out decisions every brief (FINDINGS.md #21).
+    const briefPriceMap: Record<string, number> = { BTC: btcTicker.midPrice };
+    for (const a of assets) briefPriceMap[a.asset.toUpperCase()] = a.currentPrice;
+    const openPositionsForValue = await openPositionsForCurrentMode();
+    let positionsValueUsd = 0;
+    for (const p of openPositionsForValue) {
+      const qty = parseFloat(p.quantity);
+      const price = briefPriceMap[p.asset.toUpperCase()];
+      if (price != null && Number.isFinite(price)) {
+        positionsValueUsd += qty * price;
+      }
+    }
+
     const portfolio = await assemblePortfolioSnapshot({
       cashUsd,
-      positionsValueUsd: 0,
+      positionsValueUsd,
       currentBtcPrice: btcTicker.midPrice,
     });
-
-    // Asset price data for each tracked asset
-    const assets = await fetchAssetData([...CORE_ASSETS, ...CYCLE_WATCHLIST]);
 
     // Recent news matching watchlist keywords + macro terms
     const recentNews = await fetchRecentNews();

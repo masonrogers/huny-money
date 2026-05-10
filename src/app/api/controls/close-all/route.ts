@@ -39,13 +39,32 @@ export async function POST(request: Request) {
 
     for (const pos of open) {
       try {
-        await executor.placeMarketExit(pos.asset, parseFloat(pos.quantity), {
+        const qty = parseFloat(pos.quantity);
+        const result = await executor.placeMarketExit(pos.asset, qty, {
           relatedPositionId: pos.id,
         });
+        // Populate exitPrice + grossPnl so the dashboard / Phase 1 criteria
+        // (closedTradeCount, fee drag) compute correctly. Fees paid in this
+        // exit are captured via result.feesUsd; entry-side fees are not
+        // tracked per-position here, so feesUsd reflects exit-only — a
+        // small undercount that's a separate, lower-priority fix.
+        // Market exits in paper mode return fillPrice; live executor's
+        // placeMarketExit also returns fillPrice on the synchronous
+        // response. If neither is set (unexpected), skip P&L computation
+        // rather than write a wrong number.
+        const exitPrice = result.fillPrice ?? result.price ?? null;
+        const entryPrice = parseFloat(pos.entryPrice);
+        const grossPnlUsd = exitPrice != null ? (exitPrice - entryPrice) * qty : null;
+        const exitFees = result.feesUsd ?? 0;
+        const netPnlUsd = grossPnlUsd != null ? grossPnlUsd - exitFees : null;
         await updatePosition(pos.id, {
           status: "closed",
           exitTime: new Date(),
           exitReason: "operator_close_all",
+          exitPrice: exitPrice != null ? exitPrice.toString() : null,
+          grossPnlUsd: grossPnlUsd != null ? grossPnlUsd.toString() : null,
+          feesUsd: exitFees.toString(),
+          netPnlUsd: netPnlUsd != null ? netPnlUsd.toString() : null,
         });
         closed.push(pos.id);
       } catch (err) {
