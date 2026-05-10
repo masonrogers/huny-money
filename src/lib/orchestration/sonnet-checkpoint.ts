@@ -47,14 +47,17 @@ async function runScheduledSonnetCheckpointImpl(): Promise<SonnetCheckpointResul
     const paperMode = (await stateRead<boolean>("paper_mode")) ?? true;
     setCurrentMode(paperMode ? "paper" : "live");
 
-    // Find today's morning brief — most recent `morning` evaluation in the
-    // last 36 hours (covers the longest brief→checkpoint gap).
+    // Find today's morning brief — most recent SUCCESSFULLY-PARSED `morning`
+    // evaluation in the last 36 hours. Critically, must filter to parsed=true
+    // because a failed brief (truncated/empty/bad-JSON) is stored with
+    // parsedResponse=null and would otherwise shadow the prior successful
+    // brief, blanking Sonnet visibility for ~24h (FINDINGS.md #28).
     const since = new Date(Date.now() - 36 * 3600_000);
     const briefs = await evaluationsByCallTypeSince("morning", since);
-    const latestBrief = briefs[0];
+    const latestBrief = briefs.find((b) => b.parsedResponse != null);
 
     if (!latestBrief?.parsedResponse) {
-      log.warn("Sonnet checkpoint skipped — no recent morning brief");
+      log.warn("Sonnet checkpoint skipped — no recent successfully-parsed morning brief");
       return { ok: false, reason: "awaiting_morning_brief" };
     }
 

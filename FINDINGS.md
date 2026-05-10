@@ -211,6 +211,14 @@ Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for th
 - **Why deferred:** This control is fired at most once and immediately followed by `phase=halted` + `paused=true`. The bookkeeping inconsistency exists for one transition then the bot stops. Lower priority than fixing the long-term-test surfaces.
 - **If you ever actually use convert-to-btc-hold,** be aware the resulting state will show a phantom BTC purchase with no associated position record. The cash-flow math is correct (the buy goes through orders → cash deducted via `paperCashFlowsFromDb`); only the position-side bookkeeping is missing.
 
+### 28. Failed morning brief blanks Sonnet visibility + dashboard "today" view for ~24h
+- **Files:** `src/lib/orchestration/sonnet-checkpoint.ts`, `src/lib/orchestration/wakeup-cycle.ts` (`runSonnetForWakeup`), `src/app/api/dashboard/today/route.ts`
+- **Severity:** HIGH. Compounds with #20/#24 (any future brief failure becomes a 24h Sonnet outage on top of the brief loss).
+- **Cause:** All three locations did `briefs[0]` to grab the most-recent morning evaluation. `evaluations` rows from a failed brief have `parsedResponse=null` (the brief flow stores the evaluation regardless of parse success — for audit). So a single failed brief shadows the prior successful one. Sonnet checkpoint returns `awaiting_morning_brief`, today endpoint returns `brief: null`, wake-up trigger Sonnet runner returns `no_morning_brief_yet`.
+- **Symptom in this session:** When brief at 14:52 failed parse (was the trailing-comma case), the today endpoint returned `brief: null` even though the 14:05 brief and earlier ones had succeeded.
+- **Fix:** All three call sites now use `briefs.find((b) => b.parsedResponse != null)` instead of `briefs[0]`. The latest SUCCESSFUL brief is what matters; failed attempts shouldn't suppress everything else.
+- **Why missed:** No test sets up state with a failed brief preceding a successful one, then asserts the consumers fall back correctly.
+
 ## Stylistic findings (downgraded to warning)
 
 ### 8. `react-hooks/set-state-in-effect` — 7 warnings remaining

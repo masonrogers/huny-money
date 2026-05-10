@@ -274,10 +274,12 @@ async function runSonnetForWakeup(
   spec: WakeupSpec,
   prices: Record<string, number>,
 ): Promise<RunSonnetResult> {
-  // Reload morning brief context.
+  // Reload morning brief context. Take the latest SUCCESSFULLY-PARSED
+  // brief — a failed brief shouldn't suppress wake-up triggers (FINDINGS
+  // #28). The day's prior brief is still actionable.
   const since = new Date(Date.now() - 36 * 3600_000);
   const briefs = await evaluationsByCallTypeSince("morning", since);
-  const latestBrief = briefs[0];
+  const latestBrief = briefs.find((b) => b.parsedResponse != null);
   if (!latestBrief?.parsedResponse) {
     return { kind: "suppressed", reason: "no_morning_brief_yet" };
   }

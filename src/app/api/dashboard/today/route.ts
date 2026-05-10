@@ -51,7 +51,11 @@ export async function GET() {
     async () => {
       const since = new Date(Date.now() - 36 * 3600 * 1000);
       const briefs = await evaluationsByCallTypeSince("morning", since);
-      const latest = briefs[0]; // sorted desc
+      // Take the latest SUCCESSFUL brief, not the latest attempt — a failed
+      // brief (parsedResponse=null) would otherwise blank the today view
+      // for the day, even if the prior brief was usable. Same #28 pattern
+      // as the Sonnet checkpoint.
+      const latest = briefs.find((b) => b.parsedResponse != null);
 
       const triggers = await activeTriggersAt(new Date());
 
