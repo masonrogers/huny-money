@@ -48,8 +48,20 @@ export interface ActivityEntry {
 
 const MAX_RECENT = 50;
 
-const active = new Map<string, ActivityEntry>();
-const recent: ActivityEntry[] = [];
+// Hoisted to globalThis so the wakeup cycle / scheduler / morning-brief
+// running in one Next.js App Router bundle context can write activity rows
+// that the dashboard API routes in another bundle can read. Same singleton
+// pattern as `src/lib/execution/factory.ts` (FINDINGS.md #10, #18).
+const GLOBAL_KEY = "__hunyMoneyActivityTracker" as const;
+type GlobalSlot = {
+  active: Map<string, ActivityEntry>;
+  recent: ActivityEntry[];
+};
+function slot(): GlobalSlot {
+  const g = globalThis as unknown as Record<string, GlobalSlot | undefined>;
+  if (!g[GLOBAL_KEY]) g[GLOBAL_KEY] = { active: new Map(), recent: [] };
+  return g[GLOBAL_KEY]!;
+}
 
 export function startActivity(
   kind: ActivityKind,
@@ -65,7 +77,7 @@ export function startActivity(
     startedAt: new Date().toISOString(),
     status: "running",
   };
-  active.set(id, entry);
+  slot().active.set(id, entry);
   return id;
 }
 
@@ -74,9 +86,10 @@ export function endActivity(
   status: "completed" | "failed",
   errorMessage?: string,
 ): void {
-  const entry = active.get(id);
+  const s = slot();
+  const entry = s.active.get(id);
   if (!entry) return; // already ended or never started
-  active.delete(id);
+  s.active.delete(id);
   const endedAt = new Date();
   const finished: ActivityEntry = {
     ...entry,
@@ -85,8 +98,8 @@ export function endActivity(
     durationMs: endedAt.getTime() - new Date(entry.startedAt).getTime(),
     errorMessage,
   };
-  recent.unshift(finished); // newest first
-  if (recent.length > MAX_RECENT) recent.length = MAX_RECENT;
+  s.recent.unshift(finished); // newest first
+  if (s.recent.length > MAX_RECENT) s.recent.length = MAX_RECENT;
 }
 
 /**
@@ -113,17 +126,18 @@ export async function withActivity<T>(
 
 export function getActiveActivities(): ActivityEntry[] {
   // Return a snapshot in start-time order (oldest first → "running longest").
-  return Array.from(active.values()).sort((a, b) =>
+  return Array.from(slot().active.values()).sort((a, b) =>
     a.startedAt.localeCompare(b.startedAt),
   );
 }
 
 export function getRecentActivities(limit = 20): ActivityEntry[] {
-  return recent.slice(0, limit);
+  return slot().recent.slice(0, limit);
 }
 
 /** For tests. */
 export function __resetActivityTrackerForTesting(): void {
-  active.clear();
-  recent.length = 0;
+  const s = slot();
+  s.active.clear();
+  s.recent.length = 0;
 }

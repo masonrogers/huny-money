@@ -127,6 +127,15 @@ Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for th
 - **Resolution:** Wakeup IS running. The dashboard's `recentActivity` only shows wake-up TRIGGER fires (position move, stop fill, news keyword) from the `wakeups` table — it does not show wakeup CYCLE ticks. With no held positions hitting >5% moves and watch-list keywords not matching news, the cycle runs silently. Subsequent re-check showed the wallet now updated correctly.
 - **Lesson for future debugging:** "no wakeup row" ≠ "no cycle running". Confirm by checking `last_equity_paper_usd` actually changes over time.
 
+### 18. Activity tracker had the same bundle-isolation bug as #10
+- **File:** `src/lib/activity/tracker.ts`
+- **Severity:** UX HIGH — operator's "what is the bot doing right now" indicator was always empty.
+- **Cause:** `const active = new Map(); const recent = [];` at module scope. Wakeup cycle / Sonnet check / morning brief run in the instrumentation bundle and write to *that* bundle's copy. The `/api/dashboard/activity` route runs in a different bundle, reads its own empty Map/Array.
+- **Same root cause as finding #10** — Next 16 App Router bundle splitting + module-scope mutable state.
+- **Symptom:** `/api/dashboard/activity` returned `active: [], recent: []` immediately after the wakeup cycle had clearly run (equity-curve point timestamps proved it).
+- **Fix:** Hoisted the Map + Array to globalThis, same pattern as the executor + mode singletons. Once-per-bug; should not recur because the only OTHER mutable module-scope state in `src/lib` is lazy-initializer caches (config, anthropic SDK, postgres pool) which are idempotent and safe to duplicate per bundle.
+- **Audit:** Grepped for module-scope mutable state across `src/lib`. Confirmed `intervalHandle` in `scheduler/loop.ts` is also module-scope but doesn't matter — the timer it tracks is a process-global Node primitive that fires regardless of which bundle holds the handle reference.
+
 ## Stylistic findings (downgraded to warning)
 
 ### 8. `react-hooks/set-state-in-effect` — 7 warnings remaining
