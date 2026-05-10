@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  lint-queries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/lint-queries.sh
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [typecheck]
+    env:
+      DATABASE_URL: postgres://stub:stub@localhost:5432/stub
+      COINBASE_API_KEY: stub
+      COINBASE_API_SECRET: stub
+      ANTHROPIC_API_KEY: stub
+      APP_SECRET: stub_app_secret_at_least_32_bytes_long_for_jwt_signing
+      ADMIN_PASSWORD: stub
+      CRON_SECRET: stub
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: huny
+          POSTGRES_PASSWORD: huny
+          POSTGRES_DB: huny_money
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://huny:huny@localhost:5432/huny_money
+      COINBASE_API_KEY: stub
+      COINBASE_API_SECRET: stub
+      ANTHROPIC_API_KEY: stub
+      APP_SECRET: stub_app_secret_at_least_32_bytes_long_for_jwt_signing
+      ADMIN_PASSWORD: stub
+      CRON_SECRET: stub
+      RUN_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Push schema
+        run: npx drizzle-kit push --force
+      - name: Run integration tests
+        run: npm test
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [typecheck, lint, lint-queries, unit-tests, build, integration-tests]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+    steps:
+      - name: Trigger DigitalOcean deployment
+        env:
+          DO_API_KEY_WRITE: ${{ secrets.DO_API_KEY_WRITE }}
+        run: |
+          if [ -z "$DO_API_KEY_WRITE" ]; then
+            echo "DO_API_KEY_WRITE secret not set; skipping deploy."
+            exit 1
+          fi
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer $DO_API_KEY_WRITE" \
+            -H "Content-Type: application/json" \
+            -d '{"force_build": true}' \
+            "https://api.digitalocean.com/v2/apps/e3f67164-bc0f-481e-a17d-cb1a33c3c440/deployments"

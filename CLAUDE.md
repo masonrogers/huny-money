@@ -155,6 +155,19 @@ The header always renders both value pills (`Paper $X +Y%` and `Wallet $Z`) — 
 - `RUN_LIVE_SMOKE=1 npm test -- coinbase-smoke` — 3 live-only tests verifying JWT auth + TRADE-only key + BTC ticker fetch
 - `bash scripts/lint-queries.sh` — CI rule: positions/orders mode-isolation + coinbase/orders import isolation
 
+## CI
+
+GitHub Actions runs on every push/PR to `main`:
+- `.github/workflows/ci.yml` — typecheck, lint (`eslint .`), `lint:queries`, unit tests, build (with stub envs), integration tests against an ephemeral Postgres 16 service container (`RUN_INTEGRATION=1`), then deploy to DO on green main via `force_build`.
+- `.github/workflows/smoke.yml` — manual `workflow_dispatch` + Mondays 12:00 UTC cron; runs `RUN_LIVE_SMOKE=1` against real Coinbase. Has a hard guard that refuses to start if `COINBASE_API_KEY` looks like the empty key `7b288729`.
+- Local hooks (husky): pre-commit runs `lint-staged` (eslint --fix on staged ts/tsx) + `lint:queries`; pre-push runs `typecheck` + `npm test`.
+
+GitHub repo secrets required:
+- `DO_API_KEY_WRITE` — to trigger the deploy job. Source: `/home/davidr/Desktop/.nibbles-secrets`.
+- `COINBASE_API_KEY` — funded key `88674a25` only, NEVER `7b288729`.
+- `COINBASE_API_SECRET` — paired with the above.
+- `ANTHROPIC_API_KEY` — for any Anthropic smoke checks (currently unused by `coinbase-smoke` but kept available).
+
 ## Credentials
 
 `.env.local` (gitignored):
