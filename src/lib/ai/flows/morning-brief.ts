@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { triggers } from "@/lib/db/schema";
+import { expireTriggersFromPriorBriefs } from "@/lib/db/queries/triggers";
 import { errorLogger } from "@/lib/db/utils";
 import { callOpus, budgetGate } from "@/lib/anthropic";
 import { buildOpusMorningSystemPrompt } from "../prompts/opus-morning";
@@ -114,9 +115,16 @@ export async function runMorningBrief(
     brief.watch_list.length = MAX_WATCHLIST_TRIGGERS;
   }
 
-  // 5. Persist watch list to `triggers` (active for 24h until next brief)
+  // 5. Persist watch list to `triggers` (active until the next brief).
+  // First expire any prior brief's still-active triggers — STRATEGY.md §5.3
+  // says watch list expires at next morning's brief, but the original schema
+  // gave each trigger a 26h cushion. Without explicit expiry, force-iterated
+  // briefs stack up dozens of stale conditions for the wakeup cycle to
+  // evaluate (FINDINGS.md #19).
   const activeFrom = input.timestamp;
-  const activeUntil = new Date(activeFrom.getTime() + 26 * 3600 * 1000); // 26h cushion past 24h cycle
+  const activeUntil = new Date(activeFrom.getTime() + 26 * 3600 * 1000); // 26h cushion fallback
+
+  await expireTriggersFromPriorBriefs(result.evaluationId, activeFrom);
 
   if (brief.watch_list.length > 0) {
     await db.insert(triggers).values(

@@ -136,6 +136,13 @@ Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for th
 - **Fix:** Hoisted the Map + Array to globalThis, same pattern as the executor + mode singletons. Once-per-bug; should not recur because the only OTHER mutable module-scope state in `src/lib` is lazy-initializer caches (config, anthropic SDK, postgres pool) which are idempotent and safe to duplicate per bundle.
 - **Audit:** Grepped for module-scope mutable state across `src/lib`. Confirmed `intervalHandle` in `scheduler/loop.ts` is also module-scope but doesn't matter — the timer it tracks is a process-global Node primitive that fires regardless of which bundle holds the handle reference.
 
+### 19. Watch list triggers from prior briefs don't expire when a new brief lands
+- **File:** `src/lib/ai/flows/morning-brief.ts` (the persist step) + `src/lib/db/queries/triggers.ts`
+- **Severity:** MEDIUM. Cosmetic during low-cadence operation (one brief per day = each replaces by activeUntil cushion before stacking matters), but during force-iteration or any resumed-after-pause cadence the stale triggers stack.
+- **Symptom:** After 4 force-briefs in this session, `/api/dashboard/today` returned `activeTriggers: 30` while the latest brief generated only `watch_list: 3`. STRATEGY.md §5.3 + CLAUDE.md both say "watch list expires at next morning's brief" — but the schema only gave each trigger a 26h `activeUntil` cushion, with no explicit expiry on new-brief insert.
+- **Why it matters in production:** the wakeup cycle's news_keyword check evaluates ALL active triggers every 5 min. With 30 stacked stale triggers from prior briefs, the bot wakes itself up on conditions the AI no longer thinks are relevant — wasting Sonnet API calls on outdated context, OR worse, taking position-affecting actions based on stale watch criteria.
+- **Fix:** Added `expireTriggersFromPriorBriefs(newEvalId, now)` query helper that sets `activeUntil = now` on any trigger where `morningEvalId != newEvalId` AND `activeUntil > now`. Called from `flows/morning-brief.ts` *before* inserting the new batch. The 26h fallback cushion stays as defense in depth in case a brief never replaces it (e.g., bot down for >24h).
+
 ## Stylistic findings (downgraded to warning)
 
 ### 8. `react-hooks/set-state-in-effect` — 7 warnings remaining
