@@ -307,8 +307,14 @@ async function callClaudeImpl(input: ClaudeCallInput): Promise<ClaudeCallResult>
 const OPUS_EFFORT_BY_CALL_TYPE: Partial<
   Record<CallType, { effort: EffortTier; maxTokens: number }>
 > = {
-  morning: { effort: "max", maxTokens: 16_000 },
-  review: { effort: "max", maxTokens: 16_000 },
+  // Adaptive thinking + max effort consumes both thinking AND output
+  // tokens against max_tokens. 16k was being exhausted on thinking,
+  // leaving too little for the structured JSON response (FINDINGS.md #20).
+  // Symptoms: response truncated mid-string, OR zero output but full cost
+  // billed. Bumped to 32k — Anthropic only bills used tokens, so the
+  // higher ceiling is free when the model doesn't need it.
+  morning: { effort: "max", maxTokens: 32_000 },
+  review: { effort: "max", maxTokens: 32_000 },
   opus_escalation: { effort: "medium", maxTokens: 8_000 },
   emergency: { effort: "medium", maxTokens: 8_000 },
   post_restart: { effort: "medium", maxTokens: 8_000 },

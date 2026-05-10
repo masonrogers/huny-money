@@ -143,6 +143,18 @@ Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for th
 - **Why it matters in production:** the wakeup cycle's news_keyword check evaluates ALL active triggers every 5 min. With 30 stacked stale triggers from prior briefs, the bot wakes itself up on conditions the AI no longer thinks are relevant — wasting Sonnet API calls on outdated context, OR worse, taking position-affecting actions based on stale watch criteria.
 - **Fix:** Added `expireTriggersFromPriorBriefs(newEvalId, now)` query helper that sets `activeUntil = now` on any trigger where `morningEvalId != newEvalId` AND `activeUntil > now`. Called from `flows/morning-brief.ts` *before* inserting the new batch. The 26h fallback cushion stays as defense in depth in case a brief never replaces it (e.g., bot down for >24h).
 
+### 20. Opus morning brief responses being truncated / empty due to insufficient max_tokens
+- **File:** `src/lib/anthropic/client.ts` — `OPUS_EFFORT_BY_CALL_TYPE.morning.maxTokens`
+- **Severity:** CATASTROPHIC. Two consecutive briefs failed during this session, both billed (~$0.40-0.47 each), neither produced a usable response. Morning brief is the central cadence of the bot — if it's flaky, the bot is dead.
+- **Symptoms:**
+  - Brief at 06:40 — 4396 chars of valid JSON, **truncated mid-string** (last char was `"` closing a string value, no `}` to close the object). Schema parse correctly failed.
+  - Brief at 06:45 — **0 chars of output** but $0.47 billed. Cost billed for thinking-tokens-only output.
+  - Earlier briefs (06:25, 05:55, 05:51, etc.) succeeded with 4316-5662 char responses. So this is intermittent at the existing budget.
+- **Cause:** `max_tokens: 16_000` is the TOTAL budget for adaptive thinking + output. Per Anthropic's API contract for Opus 4.7+, thinking tokens count against the same ceiling. With `effort: "max"` the model uses the bulk on thinking; longer/more-detailed responses run out of room before completing.
+- **Fix:** Bumped morning brief + review (both use `effort: "max"`) from 16k → 32k. Anthropic only bills used tokens, so the higher ceiling is free when not needed but rescues briefs that need to think hard AND produce a long structured response.
+- **Why this wasn't caught earlier:** The bot has only EVER produced a successful brief in production today (per CLAUDE.md "Status" — previous attempts failed on the legacy thinking config). The first few succeeded under 16k by chance; once the AI's reasoning got more thorough (after the regime persistence + position management deploys gave it richer context), it ran out of headroom.
+- **Future-proofing:** Should also surface `stop_reason` from the Anthropic response in error logs so this is identifiable from logs alone, not just symptom analysis. Filed as a follow-up consideration.
+
 ## Stylistic findings (downgraded to warning)
 
 ### 8. `react-hooks/set-state-in-effect` — 7 warnings remaining
