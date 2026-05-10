@@ -41,9 +41,9 @@ export function ActivityIndicator() {
           type="button"
           className={cn(
             "relative inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md",
-            "border border-[var(--color-border)] bg-[var(--color-surface-1)]",
+            "border border-[var(--color-border)] bg-[var(--color-bg-card)]",
             "text-xs font-medium text-[var(--color-text-secondary)]",
-            "hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text-primary)]",
+            "hover:bg-[var(--color-bg-card-hover)] hover:text-[var(--color-text-primary)]",
             "focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]",
             "transition-colors",
             isActive && "border-[var(--color-accent)]/40 text-[var(--color-accent)]",
@@ -72,7 +72,7 @@ export function ActivityIndicator() {
           className={cn(
             "z-50 w-[420px] max-h-[70vh] overflow-y-auto",
             "rounded-md border border-[var(--color-border)]",
-            "bg-[var(--color-surface-2)] shadow-lg",
+            "bg-[var(--color-bg-elevated)] shadow-2xl",
             "p-3",
           )}
         >
@@ -149,8 +149,8 @@ function ActivityRow({
     <li
       className={cn(
         "flex items-start gap-2.5 px-2 py-1.5 rounded text-xs",
-        live && "bg-[var(--color-surface-3)]/40",
-        !live && "hover:bg-[var(--color-surface-1)]",
+        live && "bg-[var(--color-bg-card)]",
+        !live && "hover:bg-[var(--color-bg-card)]",
       )}
     >
       <div className="mt-0.5 shrink-0">{statusIcon}</div>
