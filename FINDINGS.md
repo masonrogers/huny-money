@@ -194,6 +194,23 @@ Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for th
 - **Fix:** `softBreakerActive: portfolio.drawdownFromPeakPct >= 20`. Simple non-hysteresis trip — full hysteresis (clear at -10% recovery) deferred until/unless we see it tripping too aggressively in practice.
 - **Found by:** Audit of `Phase X` / `wired when` patterns in code after #22 surfaced as a Phase 9 leftover.
 
+### 26. Re-anchor with open positions silently corrupts cash + position-value bookkeeping
+- **File:** `src/app/api/controls/re-anchor-capital/route.ts`
+- **Severity:** HIGH (in the silent-bookkeeping-bug category — operator wouldn't notice for days).
+- **Cause:** Route always writes `last_cash_paper_usd = totalUsd` and `last_positions_value_paper_usd = 0`, regardless of whether positions exist. If positions are open at re-anchor time, the new state lies — claims all-cash + zero positions when neither is true. The next morning brief reads stale cash + positions context, makes wrong allocation decisions.
+- **Reproduction in this session:** Pre-state: $10k start, 1 BTC position. Re-anchored to $20k. Post-state: cash=$20k, equity=$20k, return=0%, positions: still 1. The bookkeeping says "$20k all cash" while the actual paper account has $5k cash + $5k BTC.
+- **Fix:** Refuse re-anchor if open positions exist. Same pattern as toggle-mode's open-position gate. Operator must close-all or reset-paper first. Returns HTTP 409 with actionable error.
+- **Why missed:** No test exercises re-anchor with positions held — only with the clean post-reset state.
+
+### 27. (DEFERRED) convert-to-btc-hold inherits bugs #11 + #21 (no position record on buy + no P&L on close)
+- **File:** `src/app/api/controls/convert-to-btc-hold/route.ts`
+- **Severity:** Medium-low. This is the §4.4 honesty-check fallback used at most once in the bot's lifetime, when the operator decides the strategy has no edge. Emergency endpoint — the bot is being shut down via this control regardless.
+- **Bugs:**
+  1. Closes positions with `status='closed' + exitTime + exitReason` only — no exitPrice, grossPnl, fees, netPnl. Same as #21 in close-all (now fixed).
+  2. Calls `executor.placeDcaLimitBuy("BTC", ...)` directly to buy BTC with cash, bypassing the decision-executor that creates the `btc_core` position record. Same root cause as #11. Result: a BTC purchase with no `positions` row to back it.
+- **Why deferred:** This control is fired at most once and immediately followed by `phase=halted` + `paused=true`. The bookkeeping inconsistency exists for one transition then the bot stops. Lower priority than fixing the long-term-test surfaces.
+- **If you ever actually use convert-to-btc-hold,** be aware the resulting state will show a phantom BTC purchase with no associated position record. The cash-flow math is correct (the buy goes through orders → cash deducted via `paperCashFlowsFromDb`); only the position-side bookkeeping is missing.
+
 ## Stylistic findings (downgraded to warning)
 
 ### 8. `react-hooks/set-state-in-effect` — 7 warnings remaining

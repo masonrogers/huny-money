@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { stateRead, stateWriter, errorLogger, appDecisionLogger } from "@/lib/db/utils";
 import { fetchPortfolioSnapshot, getTicker } from "@/lib/coinbase";
+import { openPositionsForCurrentMode } from "@/lib/db/queries/positions";
+import { setCurrentMode } from "@/lib/mode";
 import { PAPER_STARTING_CAPITAL_USD } from "@/lib/strategy/constants";
 import { log } from "@/lib/logger";
 
@@ -37,6 +39,23 @@ export async function POST(request: Request) {
     const paperMode = (await stateRead<boolean>("paper_mode")) ?? true;
     const mode: "paper" | "live" = paperMode ? "paper" : "live";
     const suffix = mode;
+    setCurrentMode(mode);
+
+    // Refuse re-anchor if there are open positions (FINDINGS.md #26).
+    // Re-anchor blindly writes last_cash = totalUsd and last_positions_value
+    // = 0, which lies about state when positions are held. The next brief
+    // would then read wildly wrong context. Operator must close-all or
+    // reset-paper FIRST. Same idea as toggle-mode's open-position gate.
+    const openPositions = await openPositionsForCurrentMode();
+    if (openPositions.length > 0) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Refused: ${openPositions.length} open position(s) exist. Re-anchor would corrupt cash + positions-value bookkeeping. Use /api/controls/close-all or /api/controls/reset-paper first.`,
+        },
+        { status: 409 },
+      );
+    }
 
     const previousStartingCapital = await stateRead<number>(
       `starting_capital_${suffix}_usd`,
