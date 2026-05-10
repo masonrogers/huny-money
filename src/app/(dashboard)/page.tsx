@@ -5,6 +5,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { EquityChart, EquityChartLegend } from "@/components/charts/equity-chart";
 import { useApi } from "@/lib/hooks/api";
+import { useDashboardView } from "@/lib/contexts/dashboard-view";
 import { formatUsd, formatPct, formatRelativeTime } from "@/lib/utils/format";
 import { Activity, ArrowDownUp, Bot, Layers, TrendingUp, Wallet } from "lucide-react";
 import type { OverviewPayload } from "@/app/api/dashboard/overview/route";
@@ -12,6 +13,7 @@ import type { EquityCurvePayload } from "@/app/api/dashboard/equity-curve/route"
 import type { WalletPayload } from "@/app/api/dashboard/wallet/route";
 
 export default function OverviewPage() {
+  const { view } = useDashboardView();
   const { data, isLoading } = useApi<OverviewPayload>("/api/dashboard/overview", {
     refreshInterval: 30_000,
   });
@@ -25,101 +27,108 @@ export default function OverviewPage() {
   return (
     <div className="space-y-6 max-w-[1400px]">
       <PageHeader
-        title="Overview"
-        description="At-a-glance view of the bot's state, equity, and what just happened."
+        title={view === "paper" ? "Paper portfolio" : "Coinbase wallet"}
+        description={
+          view === "paper"
+            ? "Synthetic accounting — what the bot would have if it were trading these decisions for real."
+            : "Your real Coinbase wallet — informational only. The bot does not trade against this in paper mode."
+        }
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <MetricCard
-          label="Total value"
-          value={formatUsd(data?.totalValueUsd ?? null)}
-          delta={data ? formatPct(data.systemReturnPct, true) : "—"}
-          deltaTone={metricTone(data?.systemReturnPct)}
-        />
-        <MetricCard
-          label="vs BTC hold"
-          value={data ? formatPct(data.btcOutperformancePct, true) : "—"}
-          delta={
-            data?.btcOutperformancePct == null
-              ? "awaiting equity snapshots"
-              : data.btcOutperformancePct >= 0
-                ? "beating benchmark"
-                : "underperforming"
-          }
-          deltaTone={metricTone(data?.btcOutperformancePct)}
-        />
-        <MetricCard
-          label="Cash (USDC)"
-          value={formatUsd(data?.cashUsd ?? null)}
-          delta={
-            data?.cashUsd != null && data.totalValueUsd && data.totalValueUsd > 0
-              ? `${((data.cashUsd / data.totalValueUsd) * 100).toFixed(0)}% of capital`
-              : "—"
-          }
-          deltaTone="muted"
-        />
-        <MetricCard
-          label="MTD API spend"
-          value={data ? formatUsd(data.apiSpend.mtd) : "—"}
-          delta={data ? `of ${formatUsd(data.apiSpend.cap)} cap` : "—"}
-          deltaTone={data && data.apiSpend.pctOfCap > 80 ? "danger" : "muted"}
-        />
-      </div>
+      {view === "paper" ? (
+        <PaperMetrics data={data} />
+      ) : (
+        <CoinbaseMetrics wallet={wallet} apiSpend={data?.apiSpend} />
+      )}
 
-      <CoinbaseWalletCard wallet={wallet} />
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Equity curve · 30 days</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {!curve || curve.points.length === 0 ? (
-            <EmptyState
-              icon={<TrendingUp />}
-              title="No equity history yet"
-              description="The first equity snapshot is captured at the next 5-minute wake-up tick. The curve overlays the same dollars held in BTC for an honest comparison."
-            />
-          ) : (
-            <div className="space-y-3">
-              <EquityChart
-                points={curve.points}
-                startingCapital={curve.startingCapitalUsd}
-                height={240}
-              />
-              <EquityChartLegend
-                trend={trendOf(curve.points.map((p) => p.equity))}
-                startingCapital={curve.startingCapitalUsd}
-              />
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {view === "coinbase" ? (
+        <CoinbaseWalletCard wallet={wallet} />
+      ) : (
         <Card>
           <CardHeader>
-            <CardTitle>Open positions</CardTitle>
+            <CardTitle>Paper equity curve · 30 days</CardTitle>
           </CardHeader>
           <CardContent>
-            {!data || isLoading ? (
-              <EmptyState title="Loading…" description="Reading positions from the database." />
-            ) : data.openPositionsCount === 0 ? (
+            {!curve || curve.points.length === 0 ? (
               <EmptyState
-                icon={<Wallet />}
-                title="No positions open"
-                description="The bot is sitting in cash. Positions appear here when the AI identifies an alt cycle entry candidate that meets all 7 entry criteria, or when the regime upgrades to bull and BTC core DCA begins."
+                icon={<TrendingUp />}
+                title="No equity history yet"
+                description="The first equity snapshot is captured at the next 5-minute wake-up tick. The curve overlays the same dollars held in BTC for an honest comparison."
               />
             ) : (
-              <div className="text-sm text-[var(--color-text-secondary)]">
-                {data.openPositionsCount} open position{data.openPositionsCount > 1 ? "s" : ""}. Full detail on the{" "}
-                <a href="/positions" className="text-[var(--color-accent)] underline">
-                  Positions
-                </a>{" "}
-                page.
+              <div className="space-y-3">
+                <EquityChart
+                  points={curve.points}
+                  startingCapital={curve.startingCapitalUsd}
+                  height={240}
+                />
+                <EquityChartLegend
+                  trend={trendOf(curve.points.map((p) => p.equity))}
+                  startingCapital={curve.startingCapitalUsd}
+                />
               </div>
             )}
           </CardContent>
         </Card>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {view === "paper" ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Paper open positions</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!data || isLoading ? (
+                <EmptyState title="Loading…" description="Reading positions from the database." />
+              ) : data.openPositionsCount === 0 ? (
+                <EmptyState
+                  icon={<Wallet />}
+                  title="No paper positions open"
+                  description="The bot is sitting in cash. Positions appear here when the AI identifies an alt cycle entry candidate that meets all 7 entry criteria, or when the regime upgrades to bull and BTC core DCA begins."
+                />
+              ) : (
+                <div className="text-sm text-[var(--color-text-secondary)]">
+                  {data.openPositionsCount} open position{data.openPositionsCount > 1 ? "s" : ""}. Full detail on the{" "}
+                  <a href="/positions" className="text-[var(--color-accent)] underline">
+                    Positions
+                  </a>{" "}
+                  page.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader>
+              <CardTitle>Wallet holdings</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!wallet?.coinbase.available ? (
+                <EmptyState
+                  icon={<Wallet />}
+                  title="Loading wallet…"
+                  description={wallet?.coinbase.error ?? "Reading Coinbase balances."}
+                />
+              ) : wallet.coinbase.holdings.length === 0 ? (
+                <EmptyState
+                  title="All cash"
+                  description={`Wallet is ${formatUsd(wallet.coinbase.cashUsd ?? 0)} in USD/USDC; no non-cash holdings.`}
+                />
+              ) : (
+                <div className="text-sm text-[var(--color-text-secondary)]">
+                  {wallet.coinbase.holdings.length} asset
+                  {wallet.coinbase.holdings.length === 1 ? "" : "s"} held. Full
+                  detail on the{" "}
+                  <a href="/positions" className="text-[var(--color-accent)] underline">
+                    Positions
+                  </a>{" "}
+                  page.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>
@@ -155,6 +164,95 @@ export default function OverviewPage() {
           </CardContent>
         </Card>
       </div>
+    </div>
+  );
+}
+
+function PaperMetrics({ data }: { data: OverviewPayload | undefined }) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <MetricCard
+        label="Paper total value"
+        value={formatUsd(data?.totalValueUsd ?? null)}
+        delta={data ? formatPct(data.systemReturnPct, true) : "—"}
+        deltaTone={metricTone(data?.systemReturnPct)}
+      />
+      <MetricCard
+        label="vs BTC hold"
+        value={data ? formatPct(data.btcOutperformancePct, true) : "—"}
+        delta={
+          data?.btcOutperformancePct == null
+            ? "awaiting equity snapshots"
+            : data.btcOutperformancePct >= 0
+              ? "beating benchmark"
+              : "underperforming"
+        }
+        deltaTone={metricTone(data?.btcOutperformancePct)}
+      />
+      <MetricCard
+        label="Paper cash"
+        value={formatUsd(data?.cashUsd ?? null)}
+        delta={
+          data?.cashUsd != null && data.totalValueUsd && data.totalValueUsd > 0
+            ? `${((data.cashUsd / data.totalValueUsd) * 100).toFixed(0)}% of capital`
+            : "—"
+        }
+        deltaTone="muted"
+      />
+      <MetricCard
+        label="MTD API spend"
+        value={data ? formatUsd(data.apiSpend.mtd) : "—"}
+        delta={data ? `of ${formatUsd(data.apiSpend.cap)} cap` : "—"}
+        deltaTone={data && data.apiSpend.pctOfCap > 80 ? "danger" : "muted"}
+      />
+    </div>
+  );
+}
+
+function CoinbaseMetrics({
+  wallet,
+  apiSpend,
+}: {
+  wallet: WalletPayload | undefined;
+  apiSpend: OverviewPayload["apiSpend"] | undefined;
+}) {
+  const cb = wallet?.coinbase;
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <MetricCard
+        label="Wallet total"
+        value={formatUsd(cb?.totalUsd ?? null)}
+        delta={
+          cb?.snapshotAtIso
+            ? `as of ${formatRelativeTime(cb.snapshotAtIso)}`
+            : cb?.error
+              ? "snapshot unavailable"
+              : "—"
+        }
+        deltaTone={cb?.error ? "danger" : "muted"}
+      />
+      <MetricCard
+        label="Wallet cash"
+        value={formatUsd(cb?.cashUsd ?? null)}
+        delta={
+          cb?.cashUsd != null && cb.totalUsd && cb.totalUsd > 0
+            ? `${((cb.cashUsd / cb.totalUsd) * 100).toFixed(0)}% of wallet`
+            : "—"
+        }
+        deltaTone="muted"
+      />
+      <MetricCard
+        label="Assets held"
+        value={cb?.holdings != null ? String(cb.holdings.length) : "—"}
+        delta="non-cash positions"
+        deltaTone="muted"
+      />
+      <MetricCard
+        label="MTD API spend"
+        value={apiSpend ? formatUsd(apiSpend.mtd) : "—"}
+        delta={apiSpend ? `of ${formatUsd(apiSpend.cap)} cap` : "—"}
+        deltaTone={apiSpend && apiSpend.pctOfCap > 80 ? "danger" : "muted"}
+      />
     </div>
   );
 }

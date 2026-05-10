@@ -4,8 +4,11 @@ import { Badge } from "@/components/ui/badge";
 import { StatusDot } from "@/components/ui/status-dot";
 import { PriceTicker } from "./price-ticker";
 import { ActivityIndicator } from "./activity-indicator";
+import { DashboardViewToggle } from "./dashboard-view-toggle";
 import { useApi } from "@/lib/hooks/api";
+import { useDashboardView } from "@/lib/contexts/dashboard-view";
 import { formatUsd, formatPct } from "@/lib/utils/format";
+import { cn } from "@/lib/utils/cn";
 import type { WalletPayload } from "@/app/api/dashboard/wallet/route";
 
 /**
@@ -51,6 +54,7 @@ export function Header(props: HeaderProps) {
   const { data: wallet } = useApi<WalletPayload>("/api/dashboard/wallet", {
     refreshInterval: 30_000,
   });
+  const { view } = useDashboardView();
 
   return (
     <header className="surface-2 border-b border-x-0 border-t-0 px-6 py-3 flex flex-col gap-2">
@@ -62,6 +66,16 @@ export function Header(props: HeaderProps) {
         </div>
       )}
 
+      {/* Row 1 — view toggle (cosmetic) + activity + ticker */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <DashboardViewToggle tradingMode={props.mode} />
+        <div className="ml-auto flex items-center gap-3">
+          <ActivityIndicator />
+          <PriceTicker />
+        </div>
+      </div>
+
+      {/* Row 2 — bot state badges + value pills (active view emphasized) */}
       <div className="flex items-center gap-4 flex-wrap">
         <Badge variant={props.mode} size="lg" className="uppercase tracking-wider">
           <StatusDot tone={props.mode} pulse />
@@ -93,29 +107,49 @@ export function Header(props: HeaderProps) {
           </Badge>
         )}
 
-        {/* Value pills — always visible, the two ledgers always shown side by side */}
-        <PaperEquityPill wallet={wallet} />
-        <CoinbaseWalletPill wallet={wallet} />
-
-        <div className="ml-auto flex items-center gap-3">
-          <ActivityIndicator />
-          <PriceTicker />
-        </div>
+        {/* Active view's pill rendered first + emphasized; the other dimmed */}
+        {view === "paper" ? (
+          <>
+            <PaperEquityPill wallet={wallet} active />
+            <CoinbaseWalletPill wallet={wallet} />
+          </>
+        ) : (
+          <>
+            <CoinbaseWalletPill wallet={wallet} active />
+            <PaperEquityPill wallet={wallet} />
+          </>
+        )}
       </div>
     </header>
   );
 }
 
-function PaperEquityPill({ wallet }: { wallet: WalletPayload | undefined }) {
+function PaperEquityPill({
+  wallet,
+  active = false,
+}: {
+  wallet: WalletPayload | undefined;
+  active?: boolean;
+}) {
   const equity = wallet?.paper.equityUsd;
   const ret = wallet?.paper.returnPct;
   const tone = ret == null ? "default" : ret >= 0 ? "success" : "danger";
   return (
     <div
-      className="flex items-center gap-2 px-2.5 py-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+      className={cn(
+        "flex items-center gap-2 px-2.5 py-1 rounded-md border text-xs transition-opacity",
+        active
+          ? "border-[var(--color-mode-paper)]/40 bg-[var(--color-mode-paper-bg)]"
+          : "border-[var(--color-border)] bg-[var(--color-bg)] opacity-60",
+      )}
       title="Synthetic paper portfolio — separate from your real Coinbase wallet."
     >
-      <span className="text-[var(--color-text-muted)] uppercase tracking-wider text-[10px]">
+      <span
+        className={cn(
+          "uppercase tracking-wider text-[10px]",
+          active ? "text-[var(--color-mode-paper)]" : "text-[var(--color-text-muted)]",
+        )}
+      >
         Paper
       </span>
       <span className="tnum font-medium text-[var(--color-text-primary)]">
@@ -130,7 +164,13 @@ function PaperEquityPill({ wallet }: { wallet: WalletPayload | undefined }) {
   );
 }
 
-function CoinbaseWalletPill({ wallet }: { wallet: WalletPayload | undefined }) {
+function CoinbaseWalletPill({
+  wallet,
+  active = false,
+}: {
+  wallet: WalletPayload | undefined;
+  active?: boolean;
+}) {
   const total = wallet?.coinbase.totalUsd;
   const available = wallet?.coinbase.available ?? false;
   const tooltip = available
@@ -140,10 +180,20 @@ function CoinbaseWalletPill({ wallet }: { wallet: WalletPayload | undefined }) {
       : "Loading Coinbase wallet…";
   return (
     <div
-      className="flex items-center gap-2 px-2.5 py-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+      className={cn(
+        "flex items-center gap-2 px-2.5 py-1 rounded-md border text-xs transition-opacity",
+        active
+          ? "border-[var(--color-success)]/40 bg-[var(--color-success-bg)]"
+          : "border-[var(--color-border)] bg-[var(--color-bg)] opacity-60",
+      )}
       title={tooltip}
     >
-      <span className="text-[var(--color-text-muted)] uppercase tracking-wider text-[10px]">
+      <span
+        className={cn(
+          "uppercase tracking-wider text-[10px]",
+          active ? "text-[var(--color-success)]" : "text-[var(--color-text-muted)]",
+        )}
+      >
         Wallet
       </span>
       <span className="tnum font-medium text-[var(--color-text-primary)]">
