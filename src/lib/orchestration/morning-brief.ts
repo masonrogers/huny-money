@@ -9,6 +9,11 @@ import {
 } from "@/lib/ai/packages/opus-morning";
 import { assemblePortfolioSnapshot } from "@/lib/ai/portfolio";
 import { computeBenchmarkSummary } from "@/lib/orchestration/btc-benchmark";
+import {
+  executeBriefDecisions,
+  type DecisionExecutorResult,
+} from "@/lib/orchestration/decision-executor";
+import { openPositionsForCurrentMode } from "@/lib/db/queries/positions";
 import { pollAllFeeds, matchKeywords } from "@/lib/news";
 import {
   CORE_ASSETS,
@@ -40,6 +45,8 @@ export interface ScheduledBriefResult {
   brief: MorningBrief;
   evaluationId: string;
   costUsd: number;
+  /** Result of executing the brief's trading decisions. */
+  execution: DecisionExecutorResult;
 }
 
 export interface ScheduledBriefError {
@@ -121,6 +128,42 @@ async function runScheduledMorningBriefImpl(): Promise<
 
     const result = await runMorningBrief(input);
 
+    // ── Execute the brief's decisions (BUILD_PLAN.md §4D) ────────────────
+    // This is the AI → orders bridge. Pre-flight gates inside the executor
+    // refuse to act when paused / halted / hard-floor breached.
+    const priceMap: Record<string, number> = {};
+    for (const a of assets) priceMap[a.asset.toUpperCase()] = a.currentPrice;
+    priceMap.BTC = btcTicker.midPrice;
+
+    const openPositions = await openPositionsForCurrentMode();
+    let altExposureUsd = 0;
+    let btcCoreUsd = 0;
+    for (const p of openPositions) {
+      const qty = parseFloat(p.quantity);
+      const price = priceMap[p.asset.toUpperCase()];
+      const value = price != null && Number.isFinite(price) ? qty * price : 0;
+      if (p.type === "alt_cycle") altExposureUsd += value;
+      else if (p.type === "btc_core") btcCoreUsd += value;
+    }
+
+    const execution = await executeBriefDecisions(result.brief, {
+      evaluationId: result.evaluationId,
+      accountValueUsd: portfolio.currentTotalValueUsd,
+      cashUsd,
+      currentPrices: priceMap,
+      currentAltExposureUsd: altExposureUsd,
+      currentBtcCoreUsd: btcCoreUsd,
+      softBreakerActive: false, // wired when soft breaker state is tracked
+    });
+
+    log.info("Brief decisions executed", {
+      evaluationId: result.evaluationId,
+      ran: execution.ran,
+      ordersPlaced: execution.ordersPlacedCount,
+      totalPlacedUsd: execution.totalPlacedUsd,
+      shortCircuit: execution.shortCircuitReason,
+    });
+
     // Persist last_*_price_at_eval for the 5%+ price-move detector.
     await stateWriter({
       key: "last_btc_price_at_eval",
@@ -166,6 +209,7 @@ async function runScheduledMorningBriefImpl(): Promise<
       brief: result.brief,
       evaluationId: result.evaluationId,
       costUsd: result.costUsd,
+      execution,
     };
   } catch (err) {
     const message = (err as Error).message;

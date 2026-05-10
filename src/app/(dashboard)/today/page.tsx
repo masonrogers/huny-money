@@ -164,6 +164,43 @@ export default function TodaysPlanPage() {
 
           <Card>
             <CardHeader>
+              <CardTitle>Actions taken</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {data.executionActions.length === 0 ? (
+                <EmptyState
+                  title="No orders placed for this brief"
+                  description="Either Opus had no actionable decisions, or pre-flight gates blocked execution (paused, halted, hard-floor, daily-loss-cap, alt-cooldown). The Decisions page shows the gate decision."
+                />
+              ) : (
+                <ul className="space-y-2 text-sm">
+                  {data.executionActions.map((a, i) => (
+                    <li
+                      key={`${a.asset}-${i}`}
+                      className="border border-[var(--color-border)] rounded-md p-3"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge variant={a.kind === "btc_core" ? "default" : "accent"}>
+                          {a.asset}
+                        </Badge>
+                        <span className="text-xs text-[var(--color-text-muted)] tnum">
+                          {a.kind === "btc_core" ? "BTC core" : "alt entry"}
+                          {a.sizeUsd != null && ` · $${a.sizeUsd.toFixed(2)}`}
+                          {a.price != null && ` @ $${a.price.toFixed(a.price < 1 ? 4 : 2)}`}
+                        </span>
+                      </div>
+                      <p className="text-[var(--color-text-secondary)] leading-relaxed">
+                        {a.reasoning}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle>Discipline check</CardTitle>
             </CardHeader>
             <CardContent>

@@ -13,10 +13,24 @@ export async function POST() {
     if (!result.ok) {
       return NextResponse.json({ ok: false, error: result.error }, { status: 500 });
     }
+    const ex = result.execution;
+    const placedCount = ex.altResults.filter((r) => r.outcome.kind === "placed").length;
+    const skippedCount = ex.altResults.filter((r) => r.outcome.kind === "skipped").length;
+    const btcPiece =
+      ex.btcCoreResult?.kind === "placed"
+        ? ` · BTC core ${ex.btcCoreResult.sizeUsd >= 0 ? "+" : ""}$${Math.abs(ex.btcCoreResult.sizeUsd).toFixed(0)}`
+        : "";
+    const altPiece =
+      placedCount > 0 || skippedCount > 0
+        ? ` · alts: ${placedCount} placed, ${skippedCount} skipped`
+        : "";
+    const shortCircuitPiece = ex.shortCircuitReason ? ` · execution skipped (${ex.shortCircuitReason})` : "";
+
     return NextResponse.json({
       ok: true,
-      message: `Morning brief complete · regime=${result.brief.regime} · $${result.costUsd.toFixed(4)}`,
+      message: `Morning brief complete · regime=${result.brief.regime} · $${result.costUsd.toFixed(4)}${altPiece}${btcPiece}${shortCircuitPiece}`,
       evaluationId: result.evaluationId,
+      execution: ex,
     });
   } catch (err) {
     await errorLogger({
