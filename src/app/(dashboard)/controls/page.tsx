@@ -83,11 +83,19 @@ export default function ControlsPage() {
             <div className="flex items-center gap-2">
               <span className="text-sm text-[var(--color-text-muted)]">Status:</span>
               {paused ? (
-                <Badge variant="warning">Paused</Badge>
+                <Badge variant={data?.pausedByBtcUnderperfGate ? "danger" : "warning"}>
+                  {data?.pausedByBtcUnderperfGate ? "Auto-paused" : "Paused"}
+                </Badge>
               ) : (
                 <Badge variant="success">Active</Badge>
               )}
             </div>
+            {paused && data?.pausedReason && (
+              <div className="text-xs text-[var(--color-text-secondary)] leading-relaxed border border-[var(--color-border)] rounded-md p-2 bg-[var(--color-surface-2)]">
+                <span className="font-medium text-[var(--color-text-primary)]">Reason:</span>{" "}
+                {data.pausedReason}
+              </div>
+            )}
             <div className="flex gap-2">
               <Button
                 variant={paused ? "secondary" : "primary"}

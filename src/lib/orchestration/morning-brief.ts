@@ -13,6 +13,7 @@ import {
   executeBriefDecisions,
   type DecisionExecutorResult,
 } from "@/lib/orchestration/decision-executor";
+import { applyBtcUnderperformanceGate } from "@/lib/risk/btc-underperformance-gate";
 import { openPositionsForCurrentMode } from "@/lib/db/queries/positions";
 import { pollAllFeeds, matchKeywords } from "@/lib/news";
 import {
@@ -127,6 +128,24 @@ async function runScheduledMorningBriefImpl(): Promise<
     };
 
     const result = await runMorningBrief(input);
+
+    // ── 60-day BTC underperformance gate (STRATEGY.md §4.4) ──────────────
+    // Run BEFORE executing decisions so the executor's preflight (which
+    // reads trading_paused) immediately blocks any orders this brief would
+    // have placed if the gate trips.
+    await applyBtcUnderperformanceGate(
+      {
+        systemReturnPct: portfolio.systemReturnPct,
+        btcHoldReturnPct:
+          portfolio.btcOutperformancePct != null
+            ? portfolio.systemReturnPct - portfolio.btcOutperformancePct
+            : 0,
+        rolling30dDeltaPct: benchmark.rolling30dDeltaPct,
+        rolling60dDeltaPct: benchmark.rolling60dDeltaPct,
+        consecutiveUnderperfDays: benchmark.consecutiveUnderperfDays,
+      },
+      result.evaluationId,
+    );
 
     // ── Execute the brief's decisions (BUILD_PLAN.md §4D) ────────────────
     // This is the AI → orders bridge. Pre-flight gates inside the executor

@@ -12,6 +12,20 @@ export async function POST(request: Request) {
       value,
       changedBy: "api.controls.pause",
     });
+    // Manual resume clears the auto-pause provenance keys so stale "paused
+    // because BTC underperformance" text doesn't linger after operator action.
+    if (!value) {
+      await stateWriter({
+        key: "trading_paused_reason",
+        value: null,
+        changedBy: "api.controls.pause",
+      });
+      await stateWriter({
+        key: "trading_paused_by_btc_underperf_gate",
+        value: false,
+        changedBy: "api.controls.pause",
+      });
+    }
     log.info("Trading pause state updated", { paused: value });
     return NextResponse.json({ ok: true, paused: value });
   } catch (err) {
