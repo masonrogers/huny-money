@@ -8,7 +8,10 @@ import { Badge } from "@/components/ui/badge";
 import { useApi } from "@/lib/hooks/api";
 import { formatUsd, formatPct } from "@/lib/utils/format";
 import { LineChart } from "lucide-react";
-import type { PerformancePayload } from "@/app/api/dashboard/performance/route";
+import type {
+  BenchmarkPanel as BenchmarkPanelData,
+  PerformancePayload,
+} from "@/app/api/dashboard/performance/route";
 import type { EquityCurvePayload } from "@/app/api/dashboard/equity-curve/route";
 
 export default function PerformancePage() {
@@ -39,6 +42,9 @@ export default function PerformancePage() {
           value={formatUsd(data?.totalFeesUsd ?? 0)}
         />
       </div>
+
+      <BenchmarkPanel benchmark={data?.benchmark} />
+
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-3">
@@ -164,6 +170,58 @@ function RMultipleHistogram({
       })}
     </div>
   );
+}
+
+function BenchmarkPanel({ benchmark }: { benchmark: BenchmarkPanelData | undefined }) {
+  // Render a placeholder card before any data lands so the layout stays stable
+  // — the API can take a tick during cold load.
+  const cumul = benchmark?.cumulativeDeltaPct ?? null;
+  const r30 = benchmark?.rolling30dDeltaPct ?? null;
+  const r60 = benchmark?.rolling60dDeltaPct ?? null;
+  const run = benchmark?.consecutiveUnderperfDays ?? 0;
+  const passes60d = benchmark?.passesPhase1Criterion ?? null;
+
+  const subtitle =
+    passes60d === true
+      ? "On track for the Phase 1 advance criterion (≥ 3% over 60d)."
+      : passes60d === false
+        ? "Below the Phase 1 advance criterion (≥ 3% over 60d)."
+        : "Awaiting 60 days of equity history before the Phase 1 criterion can resolve.";
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-3">
+        <div>
+          <CardTitle>vs. BTC hold (rolling)</CardTitle>
+          <p className="mt-1 text-xs text-[var(--color-text-muted)]">{subtitle}</p>
+        </div>
+        {passes60d != null && (
+          <Badge variant={passes60d ? "success" : "warning"}>
+            {passes60d ? "Passes 60d criterion" : "Fails 60d criterion"}
+          </Badge>
+        )}
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <DeltaStatCard label="Cumulative" deltaPct={cumul} />
+          <DeltaStatCard label="30-day rolling" deltaPct={r30} />
+          <DeltaStatCard label="60-day rolling" deltaPct={r60} />
+          <StatCard
+            label="Days underperforming"
+            value={String(run)}
+            tone={run >= 60 ? "danger" : run >= 30 ? "muted" : "muted"}
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DeltaStatCard({ label, deltaPct }: { label: string; deltaPct: number | null }) {
+  const tone: "success" | "danger" | "muted" =
+    deltaPct == null ? "muted" : deltaPct >= 0 ? "success" : "danger";
+  const value = deltaPct == null ? "—" : formatPct(deltaPct, true);
+  return <StatCard label={label} value={value} tone={tone} />;
 }
 
 function StatCard({

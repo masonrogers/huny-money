@@ -1,7 +1,18 @@
 import { stateRead } from "@/lib/db/utils";
 import { setCurrentMode } from "@/lib/mode";
 import { closedPositionsForCurrentMode } from "@/lib/db/queries/positions";
+import { mostRecentSnapshot } from "@/lib/db/queries/price_snapshots";
+import { computeBenchmarkSummary } from "@/lib/orchestration/btc-benchmark";
 import { safeDashboardHandler } from "@/lib/api/safe-handler";
+
+export interface BenchmarkPanel {
+  cumulativeDeltaPct: number | null;
+  rolling30dDeltaPct: number | null;
+  rolling60dDeltaPct: number | null;
+  consecutiveUnderperfDays: number;
+  /** True if the bot is on track for the Phase 1 advance criterion (≥3% over 60d). */
+  passesPhase1Criterion: boolean | null;
+}
 
 export interface PerformancePayload {
   startingCapitalUsd: number | null;
@@ -13,6 +24,7 @@ export interface PerformancePayload {
   avgLossPct: number | null;
   rMultipleDistribution: Array<{ bucket: string; count: number }>;
   feeDragPct: number | null;
+  benchmark: BenchmarkPanel;
   closedTrades: Array<{
     id: string;
     asset: string;
@@ -27,6 +39,14 @@ export interface PerformancePayload {
   }>;
   dbReady: boolean;
 }
+
+const EMPTY_BENCHMARK: BenchmarkPanel = {
+  cumulativeDeltaPct: null,
+  rolling30dDeltaPct: null,
+  rolling60dDeltaPct: null,
+  consecutiveUnderperfDays: 0,
+  passesPhase1Criterion: null,
+};
 
 /**
  * Buckets a list of R-multiples into a fixed histogram.
@@ -72,6 +92,7 @@ export async function GET() {
       avgLossPct: null,
       rMultipleDistribution: [],
       feeDragPct: null,
+      benchmark: EMPTY_BENCHMARK,
       closedTrades: [],
       dbReady: false,
     },
@@ -80,10 +101,33 @@ export async function GET() {
       setCurrentMode(paperMode ? "paper" : "live");
       const suffix = paperMode ? "paper" : "live";
 
-      const [startingCapital, closed] = await Promise.all([
+      const [startingCapital, closed, latestSnap] = await Promise.all([
         stateRead<number>(`starting_capital_${suffix}_usd`),
         closedPositionsForCurrentMode(200),
+        mostRecentSnapshot(),
       ]);
+
+      const currentBtcPriceUsd =
+        latestSnap?.btcPrice != null ? Number(latestSnap.btcPrice) : 0;
+      const benchmarkSummary =
+        Number.isFinite(currentBtcPriceUsd) && currentBtcPriceUsd > 0
+          ? await computeBenchmarkSummary({
+              now: new Date(),
+              currentBtcPriceUsd,
+            })
+          : null;
+      const benchmark: BenchmarkPanel = benchmarkSummary
+        ? {
+            cumulativeDeltaPct: benchmarkSummary.cumulativeDeltaPct,
+            rolling30dDeltaPct: benchmarkSummary.rolling30dDeltaPct,
+            rolling60dDeltaPct: benchmarkSummary.rolling60dDeltaPct,
+            consecutiveUnderperfDays: benchmarkSummary.consecutiveUnderperfDays,
+            passesPhase1Criterion:
+              benchmarkSummary.rolling60dDeltaPct != null
+                ? benchmarkSummary.rolling60dDeltaPct >= 3
+                : null,
+          }
+        : EMPTY_BENCHMARK;
 
       let totalRealized = 0;
       let totalFees = 0;
@@ -160,6 +204,7 @@ export async function GET() {
         avgLossPct,
         rMultipleDistribution,
         feeDragPct,
+        benchmark,
         closedTrades,
         dbReady: true,
       };

@@ -3,7 +3,8 @@ import { db } from "@/lib/db";
 import { evaluations, errors } from "@/lib/db/schema";
 import { stateRead } from "@/lib/db/utils";
 import { closedAltCycleCountSinceForCurrentMode } from "@/lib/db/queries/positions";
-import { getCurrentMode } from "@/lib/mode";
+import { mostRecentSnapshot } from "@/lib/db/queries/price_snapshots";
+import { computeBenchmarkSummary } from "@/lib/orchestration/btc-benchmark";
 
 /**
  * Phase 1 advance criteria computation per STRATEGY.md §6.3.
@@ -44,7 +45,6 @@ const WINDOW_DAYS = 60;
 export async function computePhase1Criteria(
   now: Date = new Date(),
 ): Promise<Phase1CriteriaSnapshot> {
-  const mode = getCurrentMode();
   const since = new Date(now.getTime() - WINDOW_DAYS * 24 * 3600_000);
   const sinceIso = since.toISOString();
 
@@ -79,23 +79,25 @@ export async function computePhase1Criteria(
   });
 
   // ── Hypothetical P&L vs BTC (≥ 3% over 60d) ────────────────────────
-  // Computed from current and 60-days-ago equity. Requires equity
-  // snapshots, which Phase 5+ writes. For now, compute from state.
-  const startCap = await stateRead<number>(
-    mode === "paper" ? "starting_capital_paper_usd" : "starting_capital_live_usd",
-  );
-  const btcStart = await stateRead<number>(
-    mode === "paper" ? "btc_price_at_start_paper" : "btc_price_at_start_live",
-  );
-
-  // Without equity snapshots in DB yet, we mark this as null (operator-checkable).
+  // Source of truth: btc-benchmark module reads equity snapshots from
+  // system_state_history + BTC prices from price_snapshots. Returns null
+  // for windows where the bot is younger than the window — no fabrication.
+  const benchmark = await computeBenchmarkSummary({
+    now,
+    currentBtcPriceUsd: (await currentBtcPriceFromSnapshot()) ?? 0,
+  });
+  const delta60d = benchmark.rolling60dDeltaPct;
   results.push({
     id: "outperform_btc_3pct",
     description: "Hypothetical performance > BTC hold by ≥ 3% over 60d",
     currentValue:
-      startCap != null && btcStart != null ? "see Performance page" : "insufficient_history",
+      delta60d != null
+        ? `${delta60d.toFixed(2)}%`
+        : benchmark.startingCapitalUsd == null
+          ? "no_starting_capital"
+          : "insufficient_history",
     threshold: "≥ 3%",
-    pass: null, // requires equity snapshots; populated in Phase 7 dashboard
+    pass: delta60d != null ? delta60d >= 3 : null,
   });
 
   // ── Operator-judged criteria ───────────────────────────────────────
@@ -147,6 +149,13 @@ async function operatorConfirm(stateKey: string): Promise<boolean | null> {
   if (v === true) return true;
   if (v === false) return false;
   return null;
+}
+
+async function currentBtcPriceFromSnapshot(): Promise<number | null> {
+  const snap = await mostRecentSnapshot();
+  if (snap?.btcPrice == null) return null;
+  const n = Number(snap.btcPrice);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 async function briefCountString(sinceIso: string): Promise<string> {

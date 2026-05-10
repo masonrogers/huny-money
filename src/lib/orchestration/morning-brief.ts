@@ -8,6 +8,7 @@ import {
   type NewsArticle,
 } from "@/lib/ai/packages/opus-morning";
 import { assemblePortfolioSnapshot } from "@/lib/ai/portfolio";
+import { computeBenchmarkSummary } from "@/lib/orchestration/btc-benchmark";
 import { pollAllFeeds, matchKeywords } from "@/lib/news";
 import {
   CORE_ASSETS,
@@ -88,6 +89,14 @@ async function runScheduledMorningBriefImpl(): Promise<
     // Recent news matching watchlist keywords + macro terms
     const recentNews = await fetchRecentNews();
 
+    // Rolling 30d/60d performance vs BTC, plus the trailing-underperf-day run
+    // that the 60-day circuit breaker watches.
+    const benchmark = await computeBenchmarkSummary({
+      now: new Date(),
+      currentBtcPriceUsd: btcTicker.midPrice,
+      currentEquityUsd: portfolio.currentTotalValueUsd,
+    });
+
     const input: OpusMorningPackageInput = {
       timestamp: new Date(),
       portfolio,
@@ -97,9 +106,9 @@ async function runScheduledMorningBriefImpl(): Promise<
       recentNews,
       yesterday: undefined, // populated once we have a previous-day eval reference
       benchmarkSummary: {
-        rolling30dDeltaPct: null,
-        rolling60dDeltaPct: null,
-        consecutiveUnderperfDays: 0,
+        rolling30dDeltaPct: benchmark.rolling30dDeltaPct,
+        rolling60dDeltaPct: benchmark.rolling60dDeltaPct,
+        consecutiveUnderperfDays: benchmark.consecutiveUnderperfDays,
       },
       behavioral: {
         cooldownActive: false,
