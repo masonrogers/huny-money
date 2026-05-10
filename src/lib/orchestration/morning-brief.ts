@@ -188,6 +188,38 @@ async function runScheduledMorningBriefImpl(): Promise<
       shortCircuit: execution.shortCircuitReason,
     });
 
+    // Persist regime classification. Without this, the dashboard never shows
+    // a regime, days_in_current_regime never increments, and tomorrow's brief
+    // gets `currentRegime: null` again — the central regime-aware premise of
+    // the strategy is broken (FINDINGS.md #15).
+    {
+      const newRegime = result.brief.regime;
+      const prevRegime = await stateRead<"bull" | "chop" | "bear">("current_regime");
+      const prevDays = (await stateRead<number>("days_in_current_regime")) ?? 0;
+      const changed = prevRegime !== newRegime;
+
+      await stateWriter({
+        key: "current_regime",
+        value: newRegime,
+        changedBy: "orchestration.morning-brief",
+        relatedEvalId: result.evaluationId,
+      });
+      await stateWriter({
+        key: "days_in_current_regime",
+        value: changed ? 1 : prevDays + 1,
+        changedBy: "orchestration.morning-brief",
+        relatedEvalId: result.evaluationId,
+      });
+      if (changed) {
+        await stateWriter({
+          key: "last_regime_change_at",
+          value: new Date().toISOString(),
+          changedBy: "orchestration.morning-brief",
+          relatedEvalId: result.evaluationId,
+        });
+      }
+    }
+
     // Persist last_*_price_at_eval for the 5%+ price-move detector.
     await stateWriter({
       key: "last_btc_price_at_eval",

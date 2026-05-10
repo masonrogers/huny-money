@@ -76,7 +76,18 @@ Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for th
 - **Cause:** The alt-cycle path (lines 438+) correctly calls `insertPosition({ type: "alt_cycle", ... })` before placing the order. The BTC core path was never given the equivalent — order is placed, no position row inserted.
 - **Confirmation in production:** First successful force-brief (post `06e4a0e` deploy) returned `{ kind: "placed", orderId: paper-ffab43a0..., sizeUsd: 5000, price: 80729.51 }`. `/api/dashboard/positions` then returned `open: []`. Order is in the orders table; no position exists.
 - **Why missed:** `decision-executor.test.ts` exists and tests pure helpers (preflight, sizing, trailing-stop ratchet, partial-sell quantity) but not the full BTC core entry → position bookkeeping. Integration tests under `test/integration/` cover state-writer, budget gate, paper isolation, mode transition, circuit breakers — but not orchestration end-to-end. There is no test that asserts "after `dca_in`, a `positions` row of type `btc_core` exists with the bought quantity."
-- **Status:** Bot paused as of 05:11 UTC to prevent the 14:00 UTC scheduled brief from making this mistake again. Fix in progress.
+- **Status — FIXED (`039eb48`).** Mirrors the alt pattern: ONE evergreen `btc_core` position per session. `dca_in` either updates qty + weighted-avg entry, OR inserts new if first time. `dca_out` decrements qty, OR closes if drained. `exit` closes (status=closed, exitPrice, exitTime, exitReason).
+- **Verified on production (post-deploy `c573abbf`):** second force-brief returned `positionId: b947e98c-...`. `/api/dashboard/positions` now shows the `btc_core` position: 0.03077 BTC @ $80,766, catalyst `regime=chop dca_in`, with the AI's full thesis as context.
+
+### 14. Orphan paper order from the buggy first brief — equity is bogus
+- **Severity:** Cosmetic in paper; would have been catastrophic in live.
+- **State after fix:** Paper account shows `equityUsd: $4955, cashUsd: $2470, returnPct: -50.4%` despite ZERO realized losses. The bot bought ~$7500 of BTC total across both briefs but only tracks $2485 as a position. The first brief's $5000 deduction sits in `paperCashFlowsFromDb` cash accounting without a corresponding position row.
+- **Side effect on second brief's reasoning:** The Opus brief explicitly said "catastrophic -50% vs BTC underperformance" — it was reasoning on the bogus equity curve. Coincidentally arrived at the right conclusion ("build BTC core back from 0%") but the input data was garbage. **An AI reasoning sensibly on garbage is more dangerous than one failing visibly.**
+- **Cleanup options for operator:**
+  - **Option A** (cleanest): `POST /api/controls/reset-paper` with typed phrase, reseeds to $10k. Wipes evaluations history (loses the two test briefs).
+  - **Option B**: write a one-off heal step that detects filled paper BTC orders without a `btc_core` position link and creates the position. Code complexity for a one-time issue.
+  - **Option C**: leave as-is, accept ~$5k of paper "loss" that isn't real. Noisy until next brief, then equity curve corrects itself going forward.
+- **Recommended:** Option A — clean slate, no contaminated history, two failed test briefs aren't useful data anyway.
 
 ### 12. Paper starting capital is $10,000, not the documented $500
 - **File:** documentation drift — `CLAUDE.md` says `PAPER_STARTING_CAPITAL_USD = 500`, but `/api/dashboard/wallet` returns `paper.startingCapitalUsd = 10000`.
@@ -89,6 +100,19 @@ Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for th
 - **Severity:** Low (informational), MEDIUM if the bot ever flips to live mode.
 - **Actual content (snapshot 2026-05-10T05:08 UTC):** $1557.31 total — 3076 AERO ($1557.01) + dust ETH ($0.0000075) + $0.30 USDC. So the operator has been actively using the funded key — most of the value is in AERO (a watchlist asset), almost no cash.
 - **Implication for live-mode flip:** Cross-mode boot rejection only checks the bot's own positions tables. It does NOT check the real wallet. If the bot is flipped to live mode, the live executor will see ~$0.30 cash and 3076 AERO sitting in the wallet that it didn't put there. Re-anchor would capture $1557 starting capital but the bot wouldn't know the AERO is "the operator's holding" vs "an existing position." Worth thinking about before any live-mode test.
+
+### 15. Morning brief never persists the regime classification
+- **File:** `src/lib/orchestration/morning-brief.ts`
+- **Severity:** CATASTROPHIC. Regime detection is the central alpha source of v3 strategy. The brief classifies regime correctly but never writes it to `state.current_regime`. Effect:
+  - Dashboard always shows `regime: null`
+  - `days_in_current_regime` never increments
+  - `last_regime_change_at` never set
+  - Tomorrow's brief data package reads `currentRegime: null` (via `portfolio.ts` line 60) — the AI gets zero context about prior regime classification
+  - Regime-change detection (one-level-per-day rule per CLAUDE.md) impossible — there's no prior regime to compare against
+  - The bot operates as if every morning is its first morning forever
+- **Found by:** `/api/dashboard/status` returned `regime: null, daysInRegime: null` immediately after a brief that explicitly returned `regime=chop`.
+- **Fix (`039eb48`+):** Added regime persistence at the end of `runScheduledMorningBrief()`. Reads previous regime + days, writes new regime, increments days (or resets to 1 on change), updates `last_regime_change_at` if changed. All writes get `relatedEvalId` so the audit trail can trace which brief triggered each.
+- **Why missed:** No test asserts that after a brief, `state.current_regime` matches the brief's classification. The orchestration layer's tests focus on order placement, not state-side-effects of brief output.
 
 ## Stylistic findings (downgraded to warning)
 
