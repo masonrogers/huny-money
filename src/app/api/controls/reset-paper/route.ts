@@ -97,9 +97,11 @@ export async function POST(request: Request) {
       "starting_capital_paper_usd",
     );
 
-    // Wipe paper trade history.
-    const positionsDeleted = await deleteAllPositionsForCurrentMode();
+    // Wipe paper trade history. ORDER MATTERS: orders FK -> positions, so
+    // delete orders first or the second delete violates
+    // orders_related_position_id_positions_id_fk (FINDINGS.md #23).
     const ordersDeleted = await deleteAllOrdersForCurrentMode();
+    const positionsDeleted = await deleteAllPositionsForCurrentMode();
 
     // BTC anchor from public ticker (no balance read).
     const btcTicker = await getTicker("BTC-USD");

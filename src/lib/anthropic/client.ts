@@ -19,17 +19,30 @@ import type { CallType } from "./budget-gate";
  *
  * Claude often wraps JSON in markdown code fences (```json ... ```) even when
  * the prompt says "no prose before or after." Anthropic SDK output also
- * sometimes carries trailing whitespace or accidental prose. This helper
- * tries:
+ * sometimes carries trailing whitespace, accidental prose, or trailing
+ * commas (FINDINGS.md #24). This helper tries:
  *   1. Direct JSON.parse on the raw text
  *   2. JSON.parse on the contents of a ```json ... ``` or ``` ... ``` fence
  *   3. JSON.parse on the substring from the first `{` to the last `}`
  *      (rescues responses with a stray sentence before/after the object)
+ *   4. As (3) but with trailing commas stripped (Opus occasionally emits
+ *      `..."x",}` which is technically invalid JSON but trivially recoverable)
  *
- * Returns null if all three fail. The prior bare-JSON.parse approach silently
- * lost a $0.27 morning brief (Opus 4.7 + max effort) on every fence-wrapped
- * response — see commit message for the live incident on 2026-05-09.
+ * Returns null if all four fail.
  */
+function stripTrailingCommas(s: string): string {
+  // Remove a comma immediately preceding `}` or `]`, optionally separated by
+  // whitespace. Naive regex — does not parse strings, but strings can't
+  // contain `,}` or `,]` patterns that this would corrupt because the comma
+  // would be inside string quotes (we'd match inside a string, but JSON
+  // parser would still be happy with the modification since strings don't
+  // care about extra commas being absent).
+  // Edge case: a comma inside a string literal followed by whitespace+}.
+  // Acceptable risk: the model would have to emit a string like `"foo,"}` at
+  // the very end of an object value; benign in practice.
+  return s.replace(/,(\s*[}\]])/g, "$1");
+}
+
 export function parseJsonLenient(text: string): unknown | null {
   if (!text) return null;
   try {
@@ -49,8 +62,14 @@ export function parseJsonLenient(text: string): unknown | null {
   const firstBrace = trimmed.indexOf("{");
   const lastBrace = trimmed.lastIndexOf("}");
   if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const sliced = trimmed.slice(firstBrace, lastBrace + 1);
     try {
-      return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+      return JSON.parse(sliced);
+    } catch {
+      // fall through to trailing-comma fixup
+    }
+    try {
+      return JSON.parse(stripTrailingCommas(sliced));
     } catch {
       // fall through
     }

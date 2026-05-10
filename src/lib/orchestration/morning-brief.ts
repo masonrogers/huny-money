@@ -193,7 +193,12 @@ async function runScheduledMorningBriefImpl(): Promise<
       currentPrices: priceMap,
       currentAltExposureUsd: altExposureUsd,
       currentBtcCoreUsd: btcCoreUsd,
-      softBreakerActive: false, // wired when soft breaker state is tracked
+      // Soft breaker per STRATEGY.md §6.4: ≥20% drawdown from peak halves
+      // alt position sizes (BTC core unchanged). Previously hardcoded false
+      // (FINDINGS.md #25) — alts got full size even at catastrophic drawdown.
+      // Simple non-hysteresis trip; full hysteresis (clear at -10%) is a
+      // follow-up if the breaker fires too aggressively.
+      softBreakerActive: portfolio.drawdownFromPeakPct >= 20,
     });
 
     log.info("Brief decisions executed", {

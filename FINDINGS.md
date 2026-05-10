@@ -171,6 +171,29 @@ Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for th
 - **Fix:** Compute `positionsValueUsd` up front by mark-to-market on `openPositionsForCurrentMode()` × the same `priceMap` that's about to be sent to the AI. Pass that real number into `assemblePortfolioSnapshot`. The previously-hardcoded 0 is gone.
 - **Why missed by tests:** Tests for the brief flow mock the AI response and check execution. None of them asserted "the input given to the AI's portfolio context contains real position values."
 
+### 23. Reset-paper FK violation: tries to delete positions before orders
+- **File:** `src/app/api/controls/reset-paper/route.ts`
+- **Severity:** HIGH. Operator's safety control to wipe paper progress was BROKEN — every call returned `ok: false` with a Postgres FK constraint error. If the operator wanted to reset (e.g., before starting Phase 1), they couldn't.
+- **Cause:** `deleteAllPositionsForCurrentMode()` called before `deleteAllOrdersForCurrentMode()`. But `orders.relatedPositionId` is a FK to `positions.id`. Deleting positions first violates the constraint.
+- **Found by:** First `reset-paper` after fix #22 deploy returned `update or delete on table "positions" violates foreign key constraint "orders_related_position_id_positions_id_fk"`.
+- **Fix:** Swap the order — orders first (no FK in), then positions. One-line fix.
+- **Why missed:** Reset-paper had been used in this session (~01:34 UTC, ~05:49 UTC). Both worked — because there were FILLED ORDERS before reset but no `relatedPositionId` set on the BTC core orders (BTC core path #11 never linked them — both bugs hid each other!). Fix #11 finally linked orders to positions, which exposed #23 the next time reset ran.
+
+### 24. Opus emits trailing commas in JSON; lenient parser didn't handle them
+- **File:** `src/lib/anthropic/client.ts` — `parseJsonLenient`
+- **Severity:** HIGH. Caused another silent brief failure (cost $0.18, no usable output).
+- **Symptom:** Opus response was 4080 chars, ended cleanly with `}`, but JSON.parse failed with `Illegal trailing comma before end of object`. Existing parser had three fallbacks (raw, fence-stripped, brace-substring) — none of them handled trailing commas.
+- **Why this matters:** This is intermittent (random LLM output variation), so it would silently fail briefs in production with no obvious pattern.
+- **Fix:** Added a 4th fallback — strip trailing commas before `}` or `]` and retry parse. Three new tests added (`test/parse-json-lenient.test.ts`) lock in the behavior.
+- **Found by:** Inspecting the failed brief's raw response text after seeing the same "morning brief response was not valid JSON" error post-#20 fix.
+
+### 25. Soft circuit breaker (≥20% drawdown halves alt sizes) was hardcoded OFF
+- **File:** `src/lib/orchestration/morning-brief.ts` — line 196 (now fixed)
+- **Severity:** MEDIUM (alt-only) but high-blast-radius if it ever mattered. Per STRATEGY.md §6.4 the soft breaker halves alt position sizes when drawdown from peak ≥20%. The brief was passing `softBreakerActive: false` always (with a TODO comment "wired when soft breaker state is tracked"), so alts would get full size even at catastrophic drawdown — exactly when the strategy says to be defensive.
+- **Cause:** Stale Phase 9 TODO. Pure logic existed in `circuit-breakers.ts` (`evaluateSoftBreaker`) but was never wired into the brief flow.
+- **Fix:** `softBreakerActive: portfolio.drawdownFromPeakPct >= 20`. Simple non-hysteresis trip — full hysteresis (clear at -10% recovery) deferred until/unless we see it tripping too aggressively in practice.
+- **Found by:** Audit of `Phase X` / `wired when` patterns in code after #22 surfaced as a Phase 9 leftover.
+
 ## Stylistic findings (downgraded to warning)
 
 ### 8. `react-hooks/set-state-in-effect` — 7 warnings remaining

@@ -94,4 +94,25 @@ describe("parseJsonLenient", () => {
     expect(result.regime).toBe("chop");
     expect(result.btc_core_decision.action).toBe("dca_in");
   });
+
+  // FINDINGS.md #24: Opus occasionally emits trailing commas that strict
+  // JSON.parse rejects. The parser strips them as a fallback after the
+  // brace-substring attempt fails.
+  it("recovers from trailing comma before closing brace", () => {
+    const input = '{"a":1,"b":"x",}';
+    expect(parseJsonLenient(input)).toEqual({ a: 1, b: "x" });
+  });
+
+  it("recovers from trailing comma in nested array", () => {
+    const input = '{"items":[1,2,3,],"ok":true,}';
+    expect(parseJsonLenient(input)).toEqual({ items: [1, 2, 3], ok: true });
+  });
+
+  it("recovers from trailing comma at end of long realistic response", () => {
+    const input =
+      '{"regime":"chop","watch_list":[{"id":"x"},{"id":"y"},],"discipline_check":"hold",}';
+    const r = parseJsonLenient(input) as { regime: string; watch_list: unknown[] };
+    expect(r.regime).toBe("chop");
+    expect(r.watch_list).toHaveLength(2);
+  });
 });
