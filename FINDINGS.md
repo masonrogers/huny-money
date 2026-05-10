@@ -228,6 +228,15 @@ Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for th
 - **Fix:** After scheduler starts, check `reconciliationFindings.missedEvaluation` and dispatch a catch-up `runScheduledMorningBrief()` (fire-and-forget so health checks aren't blocked). For `emergencyTriggers`: the 5-minute wakeup cycle will catch held-asset moves on its next tick within 5 min, so logged loud but no separate dispatch yet. Asset-level moves on non-held assets need a routing decision — captured as a follow-up note.
 - **Found by:** Code-reading the reconciliation flow looking for caller-handoff bugs after exhausting the dashboard / control surface bugs.
 
+### 30. Stop / take-profit / market-exit fills don't close the position record
+- **File:** `src/lib/orchestration/wakeup-cycle.ts` (lines 119-138)
+- **Severity:** CATASTROPHIC for live alt cycle trading.
+- **Cause:** When the wakeup cycle detected a fill of type `stop_limit` / `take_profit` / `market_exit`, it dispatched the wake to Sonnet (good) but **the comment explicitly said "we leave the position update to the next reconciliation pass"** — and neither morning brief nor force-reconcile actually does that.
+- **Effect:** An alt position whose stop fires has its sell order filled (cash credited via paperCashFlowsFromDb), but the `positions` row stays `status='open'` with original quantity. Next morning brief computes equity = cash + (full alt position at current price), inflated by the alt's mark-to-market value. Next decision is made against fictional holdings.
+- **Why undetected so far:** The bot has never held an alt position in any session. Only BTC core positions exist (which have no stop per §3.7). The TODO would have detonated the first time an alt entry happened and its stop fired.
+- **Found by:** Audit of "premature decoupling" patterns after #29 — looking for "we leave X to the caller / next pass / reconciliation" comments where the caller / next pass / reconciliation doesn't actually do it.
+- **Fix:** Look up the order via `orderByCoinbaseIdForCurrentMode(fill.coinbaseOrderId)`, get its `relatedPositionId`, fetch the position via `positionByIdForCurrentMode`, mark it closed with proper exitPrice + grossPnl + netPnl. Status guard ensures we don't double-close. Same exit-fees caveat as #21 (orders schema has no feesUsd column; gross == net for now, can be backfilled if Phase 1 metrics need it).
+
 ## Stylistic findings (downgraded to warning)
 
 ### 8. `react-hooks/set-state-in-effect` — 7 warnings remaining

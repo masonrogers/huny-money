@@ -1,7 +1,8 @@
 import { stateRead, stateWriter, priceSnapshotWriter } from "@/lib/db/utils";
 import { setCurrentMode } from "@/lib/mode";
 import { getExecutor } from "@/lib/execution";
-import { openPositionsForCurrentMode, updatePosition } from "@/lib/db/queries/positions";
+import { openPositionsForCurrentMode, positionByIdForCurrentMode, updatePosition } from "@/lib/db/queries/positions";
+import { orderByCoinbaseIdForCurrentMode } from "@/lib/db/queries/orders";
 import { activeTriggersAt } from "@/lib/db/queries/triggers";
 import { evaluationsByCallTypeSince } from "@/lib/db/queries/evaluations";
 import { getTickers } from "@/lib/coinbase";
@@ -115,20 +116,55 @@ async function runWakeupCycleImpl(): Promise<WakeupCycleResult> {
       result.errors.push(`entry-ladder: ${(err as Error).message}`);
     }
 
-    // 4. Update position states for fills
+    // 4. Update position states for fills (FINDINGS.md #30).
+    //    Previously this was a TODO that left positions marked "open" even
+    //    after their stop/tp/exit had filled — books showed phantom holdings,
+    //    next brief read inflated equity. Now: look up the position via the
+    //    fill's order row → relatedPositionId, close it with proper P&L.
     for (const fill of fills) {
       try {
-        // For stop_fill / take_profit / market_exit fills: close the position.
         if (
           fill.type === "stop_limit" ||
           fill.type === "take_profit" ||
           fill.type === "market_exit"
         ) {
-          // Find the position via fill's coinbaseOrderId is not direct;
-          // instead query positions where stopOrderId or tpOrderId matches.
-          // For simplicity in this iteration, we leave the position update
-          // to the next reconciliation pass. The fill row exists in `orders`
-          // and the next morning brief / force-reconcile will close out.
+          const orderRow = await orderByCoinbaseIdForCurrentMode(fill.coinbaseOrderId);
+          if (orderRow?.relatedPositionId) {
+            const pos = await positionByIdForCurrentMode(orderRow.relatedPositionId);
+            if (pos && pos.status === "open") {
+              const entryPrice = parseFloat(pos.entryPrice);
+              const qty = parseFloat(pos.quantity);
+              const grossPnl = (fill.fillPrice - entryPrice) * qty;
+              // orders schema has no feesUsd column; exit fees aren't
+              // persisted at fill time. Net = gross here (small undercount,
+              // same caveat as the close-all path in #21). Adding a feesUsd
+              // column to orders is a follow-up if Phase 1 metrics need it.
+              const exitFees = 0;
+              const netPnl = grossPnl - exitFees;
+              const exitReason =
+                fill.type === "stop_limit"
+                  ? "stop_filled"
+                  : fill.type === "take_profit"
+                    ? "tp_filled"
+                    : "market_exit_filled";
+              await updatePosition(pos.id, {
+                status: "closed",
+                exitTime: new Date(),
+                exitReason,
+                exitPrice: fill.fillPrice.toString(),
+                grossPnlUsd: grossPnl.toString(),
+                feesUsd: exitFees.toString(),
+                netPnlUsd: netPnl.toString(),
+              });
+              log.info("Position closed via fill detected in wakeup", {
+                positionId: pos.id,
+                asset: pos.asset,
+                fillType: fill.type,
+                fillPrice: fill.fillPrice,
+                grossPnl,
+              });
+            }
+          }
           await dispatchStopFillWake(fill, prices);
           result.stopFillFires++;
         }
