@@ -119,6 +119,40 @@ export async function runBoot(): Promise<BootResult> {
   // 7. Start scheduler
   startScheduler(buildSchedulerHandlers());
 
+  // 8. Act on reconciliation findings (FINDINGS.md #29). reconciliation.ts
+  //    detects these but explicitly defers the dispatch to the caller. Prior
+  //    to this fix the caller never acted — so a bot that crashed past its
+  //    14:00 UTC brief would stay stale until the NEXT day's 14:00 UTC.
+  if (reconciliationFindings?.missedEvaluation) {
+    log.warn("Reconciliation: dispatching catch-up morning brief", {
+      reason: "next_eval_at was in the past at boot",
+    });
+    // Fire-and-forget — boot returns immediately so health checks / scheduler
+    // don't wait on this. Errors are logged via the brief flow's own
+    // errorLogger, not blocking.
+    void runScheduledMorningBrief().catch(async (err) => {
+      await errorLogger({
+        severity: "error",
+        component: "boot.catch-up-brief",
+        error: err instanceof Error ? err : new Error(String(err)),
+        recovered: false,
+      }).catch(() => {});
+    });
+  }
+  if (
+    reconciliationFindings?.emergencyTriggers &&
+    reconciliationFindings.emergencyTriggers.length > 0
+  ) {
+    // Note: not dispatching directly here. The 5-minute wakeup cycle starting
+    // shortly will pick up position_move conditions via its normal flow. For
+    // ASSET-level moves on assets we don't hold, we don't have a routing yet
+    // — captured as a follow-up. Logged loud so it's visible.
+    log.warn(
+      "Reconciliation: emergency price moves detected during downtime — wakeup cycle will catch held-asset moves on next tick",
+      { triggers: reconciliationFindings.emergencyTriggers },
+    );
+  }
+
   log.info("Boot sequence complete", {
     firstLaunch,
     mode,

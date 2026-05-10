@@ -219,6 +219,15 @@ Bugs and infrastructure issues surfaced while wiring up GitHub Actions CI for th
 - **Fix:** All three call sites now use `briefs.find((b) => b.parsedResponse != null)` instead of `briefs[0]`. The latest SUCCESSFUL brief is what matters; failed attempts shouldn't suppress everything else.
 - **Why missed:** No test sets up state with a failed brief preceding a successful one, then asserts the consumers fall back correctly.
 
+### 29. Boot reconciliation detects missedEvaluation + emergencyTriggers but never acts on them
+- **Files:** `src/lib/boot/index.ts` (caller), `src/lib/execution/reconciliation.ts` (detector)
+- **Severity:** HIGH for production resilience. Bot crashes are rare but when they happen, the bot needs to recover gracefully.
+- **Symptom:** `reconciliation.ts` ends with a comment: "NOTE: This module's responsibilities are checks + safety actions. The actual rerun of missed evaluations is dispatched by the caller (the boot flow) after reconciliation returns its findings." But `boot/index.ts` only logs the findings and returns — never dispatches. Result:
+  - Bot crashes past 14:00 UTC, restarts at 16:00 UTC → `missedEvaluation: true` is set, never acted on → the bot stays stale until the NEXT day's 14:00 UTC scheduled brief (~22 hours of stale state).
+  - Bot crashes during a 5%+ price move → `emergencyTriggers` set, never acted on → bot proceeds blind.
+- **Fix:** After scheduler starts, check `reconciliationFindings.missedEvaluation` and dispatch a catch-up `runScheduledMorningBrief()` (fire-and-forget so health checks aren't blocked). For `emergencyTriggers`: the 5-minute wakeup cycle will catch held-asset moves on its next tick within 5 min, so logged loud but no separate dispatch yet. Asset-level moves on non-held assets need a routing decision — captured as a follow-up note.
+- **Found by:** Code-reading the reconciliation flow looking for caller-handoff bugs after exhausting the dashboard / control surface bugs.
+
 ## Stylistic findings (downgraded to warning)
 
 ### 8. `react-hooks/set-state-in-effect` — 7 warnings remaining
