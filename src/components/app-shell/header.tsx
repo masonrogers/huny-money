@@ -3,6 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { StatusDot } from "@/components/ui/status-dot";
 import { PriceTicker } from "./price-ticker";
+import { ActivityIndicator } from "./activity-indicator";
 
 /**
  * Top header strip — the most prominent element on every page per
@@ -80,7 +81,8 @@ export function Header(props: HeaderProps) {
           </Badge>
         )}
 
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-3">
+          <ActivityIndicator />
           <PriceTicker />
         </div>
       </div>

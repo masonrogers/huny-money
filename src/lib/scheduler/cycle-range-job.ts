@@ -4,6 +4,7 @@ import { computeCycleRange, persistCycleRange } from "@/lib/cycle/range";
 import { getTicker } from "@/lib/coinbase";
 import { CYCLE_WATCHLIST, productIdFor, CYCLE_RANGE_LOOKBACK_DAYS } from "@/lib/strategy/constants";
 import { errorLogger } from "@/lib/db/utils";
+import { withActivity } from "@/lib/activity/tracker";
 import { log } from "@/lib/logger";
 
 /**
@@ -24,6 +25,15 @@ export interface CycleRangeJobResult {
 }
 
 export async function runCycleRangeJob(now: Date = new Date()): Promise<CycleRangeJobResult> {
+  return withActivity(
+    "cycle_range_job",
+    "Cycle range recompute (nightly)",
+    () => runCycleRangeJobImpl(now),
+    `Recomputing 180-day low/high zones for ${CYCLE_WATCHLIST.join(", ")}`,
+  );
+}
+
+async function runCycleRangeJobImpl(now: Date): Promise<CycleRangeJobResult> {
   const result: CycleRangeJobResult = { success: 0, failed: 0, errors: [] };
   const startMs = Date.now();
 

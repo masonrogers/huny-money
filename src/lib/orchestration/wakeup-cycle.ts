@@ -15,6 +15,7 @@ import type { MorningBrief } from "@/lib/ai/schemas";
 import { pollAllFeeds } from "@/lib/news";
 import { CORE_ASSETS, productIdFor } from "@/lib/strategy/constants";
 import { persistEquitySnapshot } from "@/lib/orchestration/equity-snapshotter";
+import { withActivity } from "@/lib/activity/tracker";
 import { log } from "@/lib/logger";
 
 /**
@@ -48,6 +49,15 @@ export interface WakeupCycleResult {
 }
 
 export async function runWakeupCycle(): Promise<WakeupCycleResult> {
+  return withActivity(
+    "wakeup_cycle",
+    "Wake-up cycle (5-min tick)",
+    () => runWakeupCycleImpl(),
+    "Price poll + paper fills + equity snapshot + 3 wake-up triggers",
+  );
+}
+
+async function runWakeupCycleImpl(): Promise<WakeupCycleResult> {
   const result: WakeupCycleResult = {
     pricesWritten: false,
     equitySnapshotWritten: false,

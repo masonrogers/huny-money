@@ -6,6 +6,7 @@ import { monthKey } from "@/lib/db/queries/api_spend";
 import { errorLogger } from "@/lib/db/utils";
 import { redact } from "@/lib/utils/redact";
 import { log } from "@/lib/logger";
+import { withActivity } from "@/lib/activity/tracker";
 import { MODELS, type ModelId, computeCost, type UsageBreakdown } from "./pricing";
 import type { CallType } from "./budget-gate";
 
@@ -139,6 +140,16 @@ export interface ClaudeCallResult {
  * approved.
  */
 export async function callClaude(input: ClaudeCallInput): Promise<ClaudeCallResult> {
+  const modelLabel = input.model.startsWith("claude-opus") ? "Opus" : "Sonnet";
+  return withActivity(
+    "ai_call",
+    `${modelLabel}: ${input.callType.replace(/_/g, " ")}`,
+    () => callClaudeImpl(input),
+    `effort=${input.effort ?? "n/a"} max_tokens=${input.maxTokens} trigger=${input.triggerSource}`,
+  );
+}
+
+async function callClaudeImpl(input: ClaudeCallInput): Promise<ClaudeCallResult> {
   const start = Date.now();
 
   // Build the system prompt as a content block with cache_control so that

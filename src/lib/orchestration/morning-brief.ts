@@ -16,6 +16,7 @@ import {
   type Asset,
 } from "@/lib/strategy/constants";
 import { log } from "@/lib/logger";
+import { withActivity } from "@/lib/activity/tracker";
 import type { MorningBrief } from "@/lib/ai/schemas";
 
 /**
@@ -48,6 +49,17 @@ export interface ScheduledBriefError {
 const SECONDS_PER_DAY = 86_400;
 
 export async function runScheduledMorningBrief(): Promise<
+  ScheduledBriefResult | ScheduledBriefError
+> {
+  return withActivity(
+    "morning_brief",
+    "Morning brief (Opus)",
+    () => runScheduledMorningBriefImpl(),
+    "Daily 14:00 UTC orchestration: portfolio + candles + news + Opus call",
+  );
+}
+
+async function runScheduledMorningBriefImpl(): Promise<
   ScheduledBriefResult | ScheduledBriefError
 > {
   log.info("Morning brief orchestration starting");

@@ -11,6 +11,7 @@ import { type SonnetCheckInput } from "@/lib/ai/packages/sonnet-watcher";
 import type { MorningBrief } from "@/lib/ai/schemas";
 import { CORE_ASSETS, productIdFor } from "@/lib/strategy/constants";
 import { MAX_OPUS_CALLS_PER_DAY } from "@/lib/anthropic";
+import { withActivity } from "@/lib/activity/tracker";
 import { log } from "@/lib/logger";
 
 /**
@@ -31,6 +32,15 @@ export type SonnetCheckpointResult =
   | { ok: false; reason: string };
 
 export async function runScheduledSonnetCheckpoint(): Promise<SonnetCheckpointResult> {
+  return withActivity(
+    "sonnet_check",
+    "Sonnet checkpoint",
+    () => runScheduledSonnetCheckpointImpl(),
+    "06:00 / 22:00 UTC orchestration: brief recall + slim package + Sonnet call",
+  );
+}
+
+async function runScheduledSonnetCheckpointImpl(): Promise<SonnetCheckpointResult> {
   log.info("Sonnet checkpoint orchestration starting");
 
   try {
