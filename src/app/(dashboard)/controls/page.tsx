@@ -340,7 +340,7 @@ export default function ControlsPage() {
                 Reads current Coinbase balances across the full strategy universe (USD/USDC +
                 BTC/ETH/AERO/LINK/AAVE/UNI/SOL), marks each to market, and resets
                 starting_capital, the BTC anchor, and the equity-curve seeds for live mode.
-                Use this if first-launch captured the wrong capital or if you've
+                Use this if first-launch captured the wrong capital or if you&apos;ve
                 added/withdrawn funds. Equity curve restarts from this snapshot.
               </CardDescription>
             </CardHeader>
@@ -386,10 +386,10 @@ export default function ControlsPage() {
         description={
           <>
             This reads current Coinbase balances across <strong>USD, USDC, BTC, ETH, AERO,
-            LINK, AAVE, UNI, SOL</strong>, sums to a new total, and resets the current mode's{" "}
+            LINK, AAVE, UNI, SOL</strong>, sums to a new total, and resets the current mode&apos;s{" "}
             <code>starting_capital</code>, BTC buy-and-hold anchor, and equity-curve seeds.
             The equity curve <strong>restarts</strong> from this snapshot — historical
-            equity rows aren't deleted, but the headline metrics are anchored to today.
+            equity rows aren&apos;t deleted, but the headline metrics are anchored to today.
             Idempotent and safe to re-run.
           </>
         }

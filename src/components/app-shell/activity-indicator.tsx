@@ -124,7 +124,7 @@ function ActivityRow({
   entry: ActivityPayload["active"][number];
   live: boolean;
 }) {
-  const [now, setNow] = React.useState(Date.now());
+  const [now, setNow] = React.useState(() => Date.now());
   React.useEffect(() => {
     if (!live) return;
     const id = setInterval(() => setNow(Date.now()), 1_000);

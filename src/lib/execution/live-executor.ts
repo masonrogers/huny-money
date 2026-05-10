@@ -38,7 +38,7 @@ import type { OrderExecutor, OrderResult, OrderStatus, PlaceOptions } from "./in
 export class LiveExecutor implements OrderExecutor {
   readonly mode = "live" as const;
   /** @internal — set true by the factory; nothing else may toggle it. */
-  private readonly canPlaceLiveOrders: true = true;
+  private readonly canPlaceLiveOrders = true as const;
 
   /**
    * Construction is intentionally `protected` — only the factory may

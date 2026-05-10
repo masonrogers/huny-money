@@ -1,5 +1,4 @@
 import type { MorningBrief } from "../schemas";
-import type { Position } from "@/lib/db/schema";
 
 /**
  * Slim data package for Sonnet watcher checks.

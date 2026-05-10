@@ -171,7 +171,7 @@ function CoinbasePositionsView({ wallet }: { wallet: WalletPayload | undefined }
 
               <p className="text-xs text-[var(--color-text-faint)] leading-relaxed border-t border-[var(--color-border)] pt-3">
                 These balances reflect your real Coinbase wallet. They are completely
-                separate from the bot's paper accounting — the bot does not buy or
+                separate from the bot&apos;s paper accounting — the bot does not buy or
                 sell against this wallet in paper mode.
               </p>
             </div>
