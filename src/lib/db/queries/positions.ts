@@ -147,3 +147,24 @@ export async function updatePosition(
     .returning();
   return updated[0] ?? null;
 }
+
+/**
+ * Delete every position row in the current mode.
+ *
+ * USED ONLY by the operator's "reset paper progress" control. Refuses to
+ * run in live mode — paper-mode-only as a defensive double-check on top
+ * of the route's own mode assertion. Returns the number of rows deleted.
+ */
+export async function deleteAllPositionsForCurrentMode(): Promise<number> {
+  const mode = getCurrentMode();
+  if (mode !== "paper") {
+    throw new Error(
+      `deleteAllPositionsForCurrentMode refused: current mode is ${mode}, not paper`,
+    );
+  }
+  const deleted = await db
+    .delete(positions)
+    .where(eq(positions.paperMode, true))
+    .returning({ id: positions.id });
+  return deleted.length;
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,8 +8,21 @@ import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PageHeader } from "@/components/page-header";
 import { useApi, apiPost } from "@/lib/hooks/api";
-import { Bitcoin, Bot, Loader2, Pause, Play, RefreshCw, Repeat, Wallet, X } from "lucide-react";
+import {
+  Bitcoin,
+  Bot,
+  Eraser,
+  Loader2,
+  Pause,
+  Play,
+  RefreshCw,
+  Repeat,
+  Wallet,
+  X,
+} from "lucide-react";
 import type { DashboardStatusPayload } from "@/app/api/dashboard/status/route";
+
+const PAPER_DEFAULT_USD = 500;
 
 export default function ControlsPage() {
   const { data, mutate } = useApi<DashboardStatusPayload>("/api/dashboard/status");
@@ -18,10 +31,30 @@ export default function ControlsPage() {
   const [convertOpen, setConvertOpen] = useState(false);
   const [toggleOpen, setToggleOpen] = useState(false);
   const [reAnchorOpen, setReAnchorOpen] = useState(false);
+  const [resetPaperOpen, setResetPaperOpen] = useState(false);
 
   const paused = data?.paused ?? false;
   const mode = data?.mode ?? "paper";
   const target: "paper" | "live" = mode === "paper" ? "live" : "paper";
+
+  // Paper-mode balance form. Initialized from the current value once it loads;
+  // operator can edit freely after that.
+  const currentPaperCapital = data?.paperStartingCapitalUsd ?? null;
+  const [paperBalanceInput, setPaperBalanceInput] = useState<string>("");
+  useEffect(() => {
+    if (currentPaperCapital != null && paperBalanceInput === "") {
+      setPaperBalanceInput(currentPaperCapital.toFixed(2));
+    }
+  }, [currentPaperCapital, paperBalanceInput]);
+  const [resetCapitalInput, setResetCapitalInput] = useState<string>(
+    String(PAPER_DEFAULT_USD),
+  );
+
+  function parsePositive(raw: string): number | null {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return n;
+  }
 
   async function pauseTrading(p: boolean) {
     setBusy(p ? "pause" : "resume");
@@ -197,29 +230,132 @@ export default function ControlsPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Re-anchor starting capital</CardTitle>
-            <CardDescription>
-              Reads current Coinbase balances across the full strategy universe (USD/USDC +
-              BTC/ETH/AERO/LINK/AAVE/UNI/SOL), marks each to market, and resets
-              starting_capital, the BTC anchor, and the equity-curve seeds for the current
-              mode. Use this if first-launch captured the wrong capital (e.g. before the
-              full-asset scan landed) or if you've added/withdrawn funds. Equity curve
-              restarts from this snapshot.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button
-              variant="outline"
-              onClick={() => setReAnchorOpen(true)}
-              disabled={busy != null}
-            >
-              <Wallet />
-              Re-anchor capital…
-            </Button>
-          </CardContent>
-        </Card>
+        {mode === "paper" ? (
+          <>
+            <Card>
+              <CardHeader>
+                <CardTitle>Paper balance</CardTitle>
+                <CardDescription>
+                  Synthetic dollars — completely separate from your Coinbase wallet.
+                  Updating the balance reseeds the equity curve at the new amount but
+                  preserves any open paper positions and history.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="text-xs text-[var(--color-text-muted)]">
+                  Current:{" "}
+                  <span className="text-[var(--color-text-primary)] tnum">
+                    {currentPaperCapital != null
+                      ? `$${currentPaperCapital.toFixed(2)}`
+                      : "—"}
+                  </span>
+                </div>
+                <label className="block">
+                  <span className="text-xs font-medium text-[var(--color-text-secondary)]">
+                    New balance (USD)
+                  </span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="1"
+                    step="any"
+                    value={paperBalanceInput}
+                    onChange={(e) => setPaperBalanceInput(e.target.value)}
+                    className="mt-1.5 w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-md text-sm tnum focus:outline-none focus:border-[var(--color-accent)]"
+                    placeholder="500.00"
+                  />
+                </label>
+                <Button
+                  variant="primary"
+                  onClick={async () => {
+                    const n = parsePositive(paperBalanceInput);
+                    if (n == null) {
+                      toast.error("Enter a positive number.");
+                      return;
+                    }
+                    if (currentPaperCapital != null && Math.abs(n - currentPaperCapital) < 0.005) {
+                      toast.info("Balance unchanged.");
+                      return;
+                    }
+                    await postControl("Update paper balance", "/api/controls/re-anchor-capital", {
+                      confirmed: true,
+                      startingCapitalUsd: n,
+                    });
+                  }}
+                  disabled={busy != null}
+                >
+                  {busy === "Update paper balance" ? <Loader2 className="animate-spin" /> : <Wallet />}
+                  Update balance
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card className="border-[var(--color-danger)]/30">
+              <CardHeader>
+                <CardTitle>Reset paper progress</CardTitle>
+                <CardDescription>
+                  Wipes every paper position + paper order, clears queued tranches and
+                  cooldowns, and reseeds the synthetic balance to the chosen amount. The
+                  audit trail (evaluations, app_decisions, history) is preserved.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <label className="block">
+                  <span className="text-xs font-medium text-[var(--color-text-secondary)]">
+                    Reset balance to (USD)
+                  </span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="1"
+                    step="any"
+                    value={resetCapitalInput}
+                    onChange={(e) => setResetCapitalInput(e.target.value)}
+                    className="mt-1.5 w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-md text-sm tnum focus:outline-none focus:border-[var(--color-accent)]"
+                    placeholder={String(PAPER_DEFAULT_USD)}
+                  />
+                </label>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    if (parsePositive(resetCapitalInput) == null) {
+                      toast.error("Enter a positive starting balance.");
+                      return;
+                    }
+                    setResetPaperOpen(true);
+                  }}
+                  disabled={busy != null}
+                >
+                  <Eraser />
+                  Reset paper progress…
+                </Button>
+              </CardContent>
+            </Card>
+          </>
+        ) : (
+          <Card>
+            <CardHeader>
+              <CardTitle>Re-anchor starting capital</CardTitle>
+              <CardDescription>
+                Reads current Coinbase balances across the full strategy universe (USD/USDC +
+                BTC/ETH/AERO/LINK/AAVE/UNI/SOL), marks each to market, and resets
+                starting_capital, the BTC anchor, and the equity-curve seeds for live mode.
+                Use this if first-launch captured the wrong capital or if you've
+                added/withdrawn funds. Equity curve restarts from this snapshot.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button
+                variant="outline"
+                onClick={() => setReAnchorOpen(true)}
+                disabled={busy != null}
+              >
+                <Wallet />
+                Re-anchor capital…
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
         <Card className="border-[var(--color-warning)]/30">
           <CardHeader>
@@ -296,6 +432,32 @@ export default function ControlsPage() {
         onConfirm={async (payload) =>
           postControl("Convert to BTC core hold", "/api/controls/convert-to-btc-hold", payload)
         }
+      />
+
+      <ConfirmDialog
+        open={resetPaperOpen}
+        onOpenChange={setResetPaperOpen}
+        title="Reset paper progress?"
+        description={
+          <>
+            Wipes <strong>every paper position and order</strong>, clears queued ladder
+            tranches and cooldowns, and reseeds the synthetic balance to{" "}
+            <strong>${parsePositive(resetCapitalInput)?.toFixed(2) ?? "—"}</strong>. The
+            audit trail (evaluations, app_decisions, history) survives. Live-mode data is
+            never touched.
+          </>
+        }
+        tone="danger"
+        typedPhrase="reset paper progress"
+        confirmLabel="Reset paper"
+        onConfirm={async (payload) => {
+          const n = parsePositive(resetCapitalInput);
+          if (n == null) return;
+          await postControl("Reset paper", "/api/controls/reset-paper", {
+            ...payload,
+            startingCapitalUsd: n,
+          });
+        }}
       />
 
       <ConfirmDialog

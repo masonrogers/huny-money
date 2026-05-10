@@ -1,6 +1,7 @@
-import { getCandles, getTicker, getAllBalances } from "@/lib/coinbase";
+import { getCandles, getTicker } from "@/lib/coinbase";
 import { stateRead, stateWriter } from "@/lib/db/utils";
 import { setCurrentMode } from "@/lib/mode";
+import { getExecutor } from "@/lib/execution";
 import { runMorningBrief } from "@/lib/ai/flows/morning-brief";
 import {
   type OpusMorningPackageInput,
@@ -78,9 +79,13 @@ async function runScheduledMorningBriefImpl(): Promise<
     const paperMode = (await stateRead<boolean>("paper_mode")) ?? true;
     setCurrentMode(paperMode ? "paper" : "live");
 
-    // Portfolio + cash + BTC anchor
-    const balances = await getAllBalances(["USD", "USDC", "BTC", "ETH", "SOL"]);
-    const cashUsd = (balances.USDC?.total ?? 0) + (balances.USD?.total ?? 0);
+    // Cash MUST come from the executor — never directly from Coinbase. The
+    // paper executor returns synthetic paper cash (starting capital + fills);
+    // the live executor returns real USD+USDC. Mixing the two would let the
+    // bot's paper-mode plan reference the real wallet — exactly the leak
+    // STRATEGY.md §13.6 forbids.
+    const executor = getExecutor();
+    const cashUsd = await executor.getCashBalanceUsd();
     const btcTicker = await getTicker("BTC-USD");
 
     // For now we approximate position value as "cash + 0 positions" — Phase 9's

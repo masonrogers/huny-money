@@ -5,14 +5,14 @@ import {
   CrossModeBootRejection,
 } from "@/lib/execution";
 import { clearModeChangePendingFlag } from "@/lib/execution/mode-transition";
-import { assertTradeOnlyKey, fetchPortfolioSnapshot, getTicker } from "@/lib/coinbase";
+import { assertTradeOnlyKey, getTicker } from "@/lib/coinbase";
 import { startScheduler, type SchedulerHandlers } from "@/lib/scheduler";
 import { runCycleRangeJob } from "@/lib/scheduler/cycle-range-job";
 import { runScheduledMorningBrief } from "@/lib/orchestration/morning-brief";
 import { runScheduledSonnetCheckpoint } from "@/lib/orchestration/sonnet-checkpoint";
 import { runWakeupCycle } from "@/lib/orchestration/wakeup-cycle";
 import { upsertParam } from "@/lib/db/queries/params";
-import { STRATEGY_VERSION } from "@/lib/strategy/constants";
+import { PAPER_STARTING_CAPITAL_USD, STRATEGY_VERSION } from "@/lib/strategy/constants";
 import { log } from "@/lib/logger";
 
 /**
@@ -140,24 +140,20 @@ export async function runBoot(): Promise<BootResult> {
 async function initializeFirstLaunch(): Promise<number> {
   log.info("First launch — initializing state defaults");
 
-  // Capture starting capital across the FULL strategy universe (USD/USDC +
-  // BTC/ETH/AERO/LINK/AAVE/UNI/SOL). The previous version only checked
-  // BTC/ETH/SOL — anything held in AERO/LINK/AAVE/UNI was invisible to the
-  // capital scan and `starting_capital_paper_usd` came back wrong.
-  const snapshot = await fetchPortfolioSnapshot();
-  const totalUsd = snapshot.totalUsd;
-  const btcPriceUsd = snapshot.btcPriceUsd;
+  // PAPER MODE STARTING CAPITAL IS SYNTHETIC by design (STRATEGY.md §13.6).
+  // The bot's first launch defaults to paper, and paper accounting must NEVER
+  // reference the real Coinbase wallet — they are entirely separate notional
+  // ledgers. Operator can re-anchor via the dashboard if a different starting
+  // size is wanted. The BTC anchor uses the public price feed only — no
+  // balance read.
+  const btcTicker = await getTicker("BTC-USD");
+  const btcPriceUsd = btcTicker.midPrice;
+  const totalUsd = PAPER_STARTING_CAPITAL_USD;
 
-  log.info("First-launch portfolio snapshot", {
-    cashUsd: snapshot.cashUsd,
-    totalUsd,
-    holdings: snapshot.holdings.map((h) => ({
-      asset: h.asset,
-      quantity: h.quantity,
-      priceUsd: h.priceUsd,
-      valueUsd: h.valueUsd,
-    })),
-    missingPriceAssets: snapshot.missingPriceAssets,
+  log.info("First-launch synthetic paper capital", {
+    startingCapitalUsd: totalUsd,
+    btcAnchorUsd: btcPriceUsd,
+    note: "paper mode does NOT read real Coinbase balances",
   });
 
   await stateWriter({ key: "phase", value: "paper", changedBy: "boot.first-launch" });

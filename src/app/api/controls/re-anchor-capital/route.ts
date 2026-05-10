@@ -1,38 +1,28 @@
 import { NextResponse } from "next/server";
 import { stateRead, stateWriter, errorLogger, appDecisionLogger } from "@/lib/db/utils";
-import { fetchPortfolioSnapshot } from "@/lib/coinbase";
+import { fetchPortfolioSnapshot, getTicker } from "@/lib/coinbase";
+import { PAPER_STARTING_CAPITAL_USD } from "@/lib/strategy/constants";
 import { log } from "@/lib/logger";
 
 /**
- * Re-anchor starting capital from current Coinbase balances.
+ * Re-anchor starting capital.
  *
- * Use case: first-launch captured the wrong starting capital — for example
- * because the asset scan was incomplete (pre-fix it only checked
- * BTC/ETH/SOL and missed AERO/LINK/AAVE/UNI), or because funds were added
- * to the account after first-launch.
+ * Behavior is mode-aware (STRATEGY.md §13.6 — paper accounting must NEVER
+ * read the real Coinbase wallet):
  *
- * What this does (idempotent):
- *   - Reads a fresh portfolio snapshot across the full strategy universe
- *   - Updates `starting_capital_<mode>_usd` to the new total
- *   - Updates `btc_price_at_start_<mode>` (the BTC buy-and-hold anchor)
- *   - Resets `last_equity_<mode>_usd`, `last_cash_<mode>_usd`,
- *     `last_positions_value_<mode>_usd`, `peak_value_<mode>_usd` so the
- *     dashboard's equity curve restarts cleanly from this anchor
- *   - Logs the per-asset breakdown to app_decisions
+ *   PAPER mode:
+ *     - `startingCapitalUsd` operator-supplied (default PAPER_STARTING_CAPITAL_USD)
+ *     - BTC anchor pulled from the public ticker feed only
+ *     - Resets all `_paper_` equity / cash / peak / positions-value state keys
+ *     - Does NOT touch `positions` or `orders` — see /api/controls/reset-paper
+ *       for a full paper-progress wipe
  *
- * What this does NOT do:
- *   - Does not import existing Coinbase holdings as managed `positions`
- *     rows. Paper mode's accounting is hypothetical: starting capital
- *     captures the wallet's value at anchor time and paper trading
- *     proceeds from there. Live-mode position import is a separate
- *     feature (TODO when paper→live transition is exercised).
- *   - Does not retroactively rewrite the equity-curve history. The curve
- *     restarts from this snapshot.
+ *   LIVE mode:
+ *     - Reads the real Coinbase portfolio snapshot
+ *     - Used when a live-mode first-launch captured the wrong total
  *
  * Confirmation: requires `confirmed: true` in the body. The dashboard
- * button wraps this in a single-step confirm dialog (re-anchoring is
- * idempotent + doesn't touch positions/orders, so double-confirm is
- * overkill — simple confirm + visible per-asset breakdown is enough).
+ * wraps this in a single-step confirm dialog.
  */
 export async function POST(request: Request) {
   try {
@@ -48,40 +38,73 @@ export async function POST(request: Request) {
     const mode: "paper" | "live" = paperMode ? "paper" : "live";
     const suffix = mode;
 
-    const snapshot = await fetchPortfolioSnapshot();
-
     const previousStartingCapital = await stateRead<number>(
       `starting_capital_${suffix}_usd`,
     );
 
+    let totalUsd: number;
+    let cashUsd: number;
+    let btcPriceUsd: number;
+    let breakdown: unknown = null;
+
+    if (mode === "paper") {
+      const requested = body?.startingCapitalUsd;
+      if (requested !== undefined) {
+        const n = Number(requested);
+        if (!Number.isFinite(n) || n <= 0) {
+          return NextResponse.json(
+            { ok: false, error: "startingCapitalUsd must be a positive number" },
+            { status: 400 },
+          );
+        }
+        totalUsd = n;
+      } else {
+        totalUsd = PAPER_STARTING_CAPITAL_USD;
+      }
+      cashUsd = totalUsd; // paper resets to all-cash; positions wiped via reset-paper
+      const btcTicker = await getTicker("BTC-USD");
+      btcPriceUsd = btcTicker.midPrice;
+    } else {
+      // Live mode: snapshot real Coinbase balances. Operator can't override
+      // the number — we want the real total, not a fiction.
+      const snapshot = await fetchPortfolioSnapshot();
+      totalUsd = snapshot.totalUsd;
+      cashUsd = snapshot.cashUsd;
+      btcPriceUsd = snapshot.btcPriceUsd;
+      breakdown = {
+        holdings: snapshot.holdings,
+        missingPriceAssets: snapshot.missingPriceAssets,
+      };
+    }
+
     await stateWriter({
       key: `starting_capital_${suffix}_usd`,
-      value: snapshot.totalUsd,
+      value: totalUsd,
       changedBy: "api.controls.re-anchor-capital",
     });
     await stateWriter({
       key: `btc_price_at_start_${suffix}`,
-      value: snapshot.btcPriceUsd,
+      value: btcPriceUsd,
       changedBy: "api.controls.re-anchor-capital",
     });
     await stateWriter({
       key: `last_equity_${suffix}_usd`,
-      value: snapshot.totalUsd,
+      value: totalUsd,
       changedBy: "api.controls.re-anchor-capital",
     });
     await stateWriter({
       key: `last_cash_${suffix}_usd`,
-      value: snapshot.cashUsd,
+      value: cashUsd,
       changedBy: "api.controls.re-anchor-capital",
     });
     await stateWriter({
       key: `last_positions_value_${suffix}_usd`,
-      value: snapshot.totalUsd - snapshot.cashUsd,
+      value: totalUsd - cashUsd,
       changedBy: "api.controls.re-anchor-capital",
     });
     await stateWriter({
       key: `peak_value_${suffix}_usd`,
-      value: snapshot.totalUsd,
+      value: totalUsd,
       changedBy: "api.controls.re-anchor-capital",
     });
 
@@ -91,37 +114,39 @@ export async function POST(request: Request) {
         action: "re_anchor_capital",
         mode,
         previousStartingCapital,
+        operatorSupplied: mode === "paper" ? body?.startingCapitalUsd ?? null : null,
       },
       outputs: {
-        cashUsd: snapshot.cashUsd,
-        totalUsd: snapshot.totalUsd,
-        btcPriceUsd: snapshot.btcPriceUsd,
-        holdings: snapshot.holdings,
-        missingPriceAssets: snapshot.missingPriceAssets,
+        cashUsd,
+        totalUsd,
+        btcPriceUsd,
+        breakdown,
       },
-      reasoning: `Re-anchored ${mode}-mode starting capital from $${previousStartingCapital ?? 0} to $${snapshot.totalUsd.toFixed(2)}. Equity curve restarts from this point.`,
+      reasoning:
+        mode === "paper"
+          ? `Re-anchored paper-mode starting capital from $${(previousStartingCapital ?? 0).toFixed(2)} to $${totalUsd.toFixed(2)} (synthetic — does not reference real wallet). Equity curve restarts from this point. Open paper positions are NOT wiped — use /reset-paper for that.`
+          : `Re-anchored live-mode starting capital from $${(previousStartingCapital ?? 0).toFixed(2)} to $${totalUsd.toFixed(2)} (from real Coinbase snapshot). Equity curve restarts from this point.`,
     });
 
     log.warn("RE-ANCHOR CAPITAL executed by operator", {
       mode,
       previousStartingCapital,
-      newStartingCapital: snapshot.totalUsd,
-      cashUsd: snapshot.cashUsd,
-      holdings: snapshot.holdings.length,
-      missingPriceAssets: snapshot.missingPriceAssets,
+      newStartingCapital: totalUsd,
+      cashUsd,
     });
 
     return NextResponse.json({
       ok: true,
-      message: `Capital re-anchored: $${snapshot.totalUsd.toFixed(2)} (was $${(previousStartingCapital ?? 0).toFixed(2)}). Equity curve will restart from this point.`,
+      message:
+        mode === "paper"
+          ? `Paper capital re-anchored: $${totalUsd.toFixed(2)} (was $${(previousStartingCapital ?? 0).toFixed(2)}). Synthetic dollars — separate from your Coinbase wallet.`
+          : `Live capital re-anchored: $${totalUsd.toFixed(2)} (was $${(previousStartingCapital ?? 0).toFixed(2)}).`,
+      mode,
       previousStartingCapital,
-      snapshot: {
-        cashUsd: snapshot.cashUsd,
-        totalUsd: snapshot.totalUsd,
-        btcPriceUsd: snapshot.btcPriceUsd,
-        holdings: snapshot.holdings,
-        missingPriceAssets: snapshot.missingPriceAssets,
-      },
+      newStartingCapital: totalUsd,
+      cashUsd,
+      btcPriceUsd,
+      breakdown,
     });
   } catch (err) {
     await errorLogger({

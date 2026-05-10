@@ -13,8 +13,11 @@ Beat BTC buy-and-hold over rolling 60-day windows on a $500 USDC account, net of
 ## Current State
 
 - **Strategy:** `STRATEGY.md` v3.0 — adopted as the active spec
-- **Code:** Phases 1–9 + 9.1 complete on `main`. Backend, frontend, all controls, integration tests, boot orchestration, scheduler dispatch.
-- **Test suite:** 160/160 unit tests passing. 27 integration tests gated on `RUN_INTEGRATION=1`.
+- **Code:** Phases 1–9 + 9.1 complete + planning→execution loop fully wired.
+  Backend, frontend, all controls, decision-executor (the AI brief → orders bridge),
+  two-tranche entry ladder, alt position management (trail/partial/exit), 60-day BTC
+  underperformance auto-pause gate, BTC benchmark module.
+- **Test suite:** 256 unit tests passing. 30 integration tests gated on `RUN_INTEGRATION=1`.
 - **DO deployment:** see "Where things stand" below.
 - **Trading mode:** paper. Will remain paper for the 60-day Phase 1 window per `STRATEGY.md §6.3`.
 
@@ -53,6 +56,7 @@ Per `STRATEGY.md §13`, paper mode is treated as a critical-path safety system. 
 - `src/lib/execution/factory.ts` — called once at boot, reads `state.paper_mode`, returns the appropriate executor. The mode is invariant for the session — **the executor object IS the mode**.
 - Mode toggle requires typed-phrase confirmation + zero open positions in either mode + zero pending orders + Phase 1 criteria pass (for paper→live). Takes effect on next boot.
 - Boot reconciliation refuses to start if it finds open positions in the OTHER mode (`CrossModeBootRejection`).
+- **Paper accounting is fully synthetic.** Paper mode never reads the real Coinbase wallet for cash. First-launch seeds `starting_capital_paper_usd = PAPER_STARTING_CAPITAL_USD` ($500 default). The morning brief reads cash via `executor.getCashBalanceUsd()` so paper gets paper cash and live gets live cash; `getAllBalances()` is never called from a mode-agnostic path. Re-anchor in paper mode takes an operator-supplied amount; in live mode reads the real wallet. Reset-paper control wipes paper positions/orders + reseeds.
 
 ### Database schema (`src/lib/db/schema.ts`)
 
@@ -81,10 +85,24 @@ Per `§5.5`:
 
 Each fire dispatches via `dispatchWakeup` → logs to `wakeups` → budget-gates → calls Sonnet. Debounce state lives in `state` keys (`last_wakeup_<type>_<identifier>_at`) and survives restarts.
 
+### Decision-execution loop (`src/lib/orchestration/`)
+
+The bridge from "Opus produces a brief" to "orders land in the database":
+
+- **`decision-executor.ts`** — consumes `MorningBrief`, runs preflight (paused / halted / hard floor / loss cap / cooldown), then dispatches each decision:
+  - **Alt entries** (`alt_entry_candidates`): half-size limit-buy + initial -stop_pct stop now; second tranche queued via `entry-ladder.ts` for ~12h later
+  - **BTC core** (`btc_core_decision`): `dca_in` places one tranche; `exit`/`dca_out` market-sells; `hold` no-ops
+  - **Alt position management** (`alt_positions`): `hold`/`trail_stop`/`partial_sell`/`exit`; trail_stop ratchets per `ALT_TRAILING_STOP_SCHEDULE` (+25→entry, +50→+20, +75→+40, +100→+65 from entry) and never downgrades; partial_sell drains in 1/3-of-original tranches; exit market-sells remaining + closes position
+  - Idempotent per evaluation id (`state.last_executed_brief_eval_id`)
+  - Every routing decision logs to `app_decisions` for the dashboard's "Actions taken" panel
+- **`entry-ladder.ts`** — second-tranche state lives in `state.pending_entry_ladders`. `processPendingEntryLadders()` fires from the wake-up cycle every 5 min: revalidates (position open, price within ±10% of entry), places tranche 2, cancels old stop, re-places stop on combined qty. Drops the tranche on drift / closed position / placement error.
+- **`btc-benchmark.ts`** — single source of truth for "bot vs BTC hold". Reads equity from `system_state_history` + BTC prices from `price_snapshots`. Returns rolling 30/60d delta + cumulative + consecutive-underperf-days. Returns null for windows the bot is younger than rather than fabricating data.
+- **`btc-underperformance-gate.ts`** (in `src/lib/risk/`) — wraps `evaluateBtcUnderperformance`. Auto-pauses trading (`state.trading_paused = true` + `trading_paused_reason`) when 60d delta < 0 AND 60+ consecutive underperf days. Decision-executor's preflight reads the flag and refuses to act, so the gate has teeth from the same brief.
+
 ### Boot sequence (`src/lib/boot/index.ts`)
 
 1. Coinbase TRADE-only assertion (refuses to start if withdrawal enabled — non-negotiable)
-2. First-launch detection — if `state.last_boot_at` is empty, capture starting capital + BTC anchor + default phase=paper
+2. First-launch detection — if `state.last_boot_at` is empty, seed paper-mode synthetic capital ($500 default) + BTC anchor from public ticker + default phase=paper
 3. `bootConstructExecutor()` — reads `state.paper_mode`, sets the global mode singleton, returns the typed `OrderExecutor`
 4. `runBootReconciliation()` — cross-mode rejection, missing-stop placement, missed-eval detection, 5%+ price-move detection during downtime
 5. `clearModeChangePendingFlag()` — operator's pending mode toggle now in effect
@@ -94,14 +112,14 @@ Each fire dispatches via `dispatchWakeup` → logs to `wakeups` → budget-gates
 
 9 dashboard views matching `STRATEGY.md §8.2`:
 - Overview (default landing)
-- Today's Plan (live morning brief beautifully rendered)
+- Today's Plan (live morning brief beautifully rendered + "Actions taken" panel showing each order placed for the latest brief)
 - AI Activity (every Opus + Sonnet call with full prompt/response, expandable)
 - Positions (open + closed, with Coinbase order IDs visible)
 - Cycle Position (per-asset zone display)
 - Decisions & Triggers (watch list + wakeups + app decisions + state change log)
-- Performance (closed trades, win rate, fees, equity placeholder)
+- Performance (closed trades, win rate, fees, equity curve, "vs. BTC hold (rolling)" panel with cumulative/30d/60d delta + days-underperforming + Phase 1 criterion badge)
 - System (API budget, errors, last successful actions, Phase 1 criteria)
-- Controls (working pause/resume/force-brief/reconcile/close-all/convert-to-BTC)
+- Controls (pause/resume + auto-pause reason banner / force-brief / reconcile / mode toggle / close-all / convert-to-BTC + paper-mode-only: edit paper balance + reset paper progress; live-mode-only: re-anchor capital from real wallet)
 
 Plus auth (`(auth)/login`) with JWT session cookie. Live BTC/ETH/SOL ticker in the header (Coinbase Exchange WS). Cmd+K command palette for navigation + actions. Sonner toasts for state changes (paused, resumed, mode-change-pending banner). Framer Motion page transitions.
 
@@ -109,8 +127,8 @@ Plus auth (`(auth)/login`) with JWT session cookie. Live BTC/ETH/SOL ticker in t
 
 ## Tests
 
-- `npm test` — 160 unit tests (no DB needed): redact, mode singleton, config, lint-queries, indicators, cycle range, candle compress, AI schemas, AI prompts, pricing, RSS poller, position sizing, circuit breakers (pure), scheduler schedule, triggers (pure), execution validation, factory keys, isolation
-- `RUN_INTEGRATION=1 npm test` — 27 integration tests against the live DB: stateWriter atomicity, budget gate behavior, paper-mode isolation, mode transition gate, circuit breakers
+- `npm test` — 256 unit tests (no DB needed): redact, mode singleton, config, lint-queries, indicators, cycle range, candle compress, AI schemas, AI prompts, pricing, RSS poller, position sizing, circuit breakers (pure), scheduler schedule, triggers (pure), execution validation, factory keys, isolation, btc-benchmark math, decision-executor pure helpers (preflight + sizing + trailing-stop ratchet + partial-sell quantity), entry-ladder math
+- `RUN_INTEGRATION=1 npm test` — 30 integration tests against the live DB: stateWriter atomicity, budget gate behavior, paper-mode isolation, mode transition gate, circuit breakers, btc-underperformance-gate side-effect contract
 - `RUN_LIVE_SMOKE=1 npm test -- coinbase-smoke` — 3 live-only tests verifying JWT auth + TRADE-only key + BTC ticker fetch
 - `bash scripts/lint-queries.sh` — CI rule: positions/orders mode-isolation + coinbase/orders import isolation
 
@@ -184,19 +202,23 @@ The deploy command runs `drizzle-kit push --force` from inside the DO sandbox (w
 
 ## Status
 
-**Deployed and live** at https://huny-money-mfiyo.ondigitalocean.app in paper mode. Boot has succeeded; scheduler is ticking; cycle range job has run. Phase 10 (60-day paper window) is in progress.
+**Deployed and live** at https://huny-money-mfiyo.ondigitalocean.app in paper mode. Boot has succeeded; scheduler is ticking; cycle range job has run. **Every code mechanism specified in `STRATEGY.md` is now implemented.** Phase 10 (60-day paper observation window) is in progress.
 
-**Confirmed working live:** boot sequence, Coinbase JWT auth + TRADE-only check, cycle range nightly job (5/5 watchlist assets), pause/resume, all 9 control buttons (Pause/Resume, Force Brief, Force Reconcile, Mode Toggle, Close All, Convert to BTC core hold) with proper confirmation dialogs.
+**Confirmed working live:** boot sequence, Coinbase JWT auth + TRADE-only check, cycle range nightly job (5/5 watchlist assets), pause/resume, all dashboard control buttons with proper confirmation dialogs.
 
-**Not yet exercised live:**
-- Successful Opus morning brief (last attempt failed on legacy-thinking-config issue, since fixed; the next 14:00 UTC tick OR a Force Brief click will be the first real test)
-- Sonnet checkpoint with a brief in scope
+**Not yet exercised live (the next morning brief is the first real end-to-end test):**
+- Successful Opus morning brief (last attempt failed on legacy-thinking-config issue, since fixed)
+- Decision-executor placing actual orders from a brief (alt entries, BTC core, position management)
+- Two-tranche entry ladder firing tranche 2 from the wake-up cycle ~12h after tranche 1
+- Trail-stop ratcheting on a held alt at +25% / +50% / +75% / +100%
+- 60-day BTC underperformance auto-pause gate (needs 60 days of equity history first)
+- Sonnet checkpoint with a brief in scope + escalation to Opus
 - Wake-up triggers (need positions or significant moves)
-- Mode toggle / close-all / convert-to-BTC end-to-end (need positions to exist first for some)
+- Mode toggle / close-all / convert-to-BTC end-to-end (some need positions to exist first)
 
 ## What's Next
 
-1. First morning brief at next 14:00 UTC tick (or via dashboard Force Brief button)
+1. First morning brief at next 14:00 UTC tick (or via dashboard Force Brief button) — first end-to-end exercise of the planning → execution loop
 2. Operator reads ≥ 10 morning briefs and judges them coherent
 3. At 60 days, evaluate Phase 1 advance criteria per `STRATEGY.md §6.3`. Pass → Phase 2 (half-size live, 60 days). Fail → extend or shut down.
 

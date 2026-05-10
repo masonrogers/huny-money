@@ -101,3 +101,17 @@ export const BTC_UNDERPERFORMANCE_FAIL_PCT = 5;
 // ---------------------------------------------------------------------------
 
 export const MAX_WATCHLIST_TRIGGERS = 5;
+
+// ---------------------------------------------------------------------------
+// Paper-mode synthetic capital (STRATEGY.md §13.6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Default starting capital for paper mode. Paper accounting is fully
+ * synthetic — it never reads or references the real Coinbase balance.
+ * This number defines the size of the hypothetical portfolio the paper
+ * executor manages.
+ *
+ * Operator can override at re-anchor time via the dashboard control.
+ */
+export const PAPER_STARTING_CAPITAL_USD = 500;
