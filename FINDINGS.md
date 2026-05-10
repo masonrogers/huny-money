@@ -14,8 +14,8 @@ After landing the bug-fix wave during the live force-iteration loop, a follow-up
 **Still on the punch list (deliberately deferred):**
 - **#8** — 7 react-hooks/set-state-in-effect warnings, downgraded to warn. Legitimate hydration / clear-on-open patterns.
 - **#12, #13, #14** — documentation drift / one-time data issues. The runtime $10k paper anchor was operator-induced; CLAUDE.md still correctly references the $500 constant.
-- **#29 follow-up** — non-held-asset emergencyTriggers from boot reconciliation are logged-loud only; no separate routing dispatch (held-asset moves are picked up by the wakeup cycle within 5 min).
 - **Live-mode `orders.feesUsd` population** — the new column exists; live executor needs a reconciliation step to write Coinbase fee data. Not urgent until Phase 2 (live trading).
+- **drizzle-kit push 42P16 root cause** — push has been silently failing on every prod deploy with `column "id" is in a primary key`. `applyAdditiveMigrations` is the safety net. Diagnostic added in commit `147eced` to log prod-DB schema drift; root cause + fix are the next concrete cleanup once the diagnostic output is in hand.
 
 After this sweep: 264 unit tests pass, eslint shows only the 7 warnings noted in #8, lint:queries clean, build OK with stub envs.
 
@@ -288,7 +288,8 @@ After CI was wired and the deploy went out, force-iterating the bot in productio
 - **Symptom:** `reconciliation.ts` ends with a comment: "NOTE: This module's responsibilities are checks + safety actions. The actual rerun of missed evaluations is dispatched by the caller (the boot flow) after reconciliation returns its findings." But `boot/index.ts` only logs the findings and returns — never dispatches. Result:
   - Bot crashes past 14:00 UTC, restarts at 16:00 UTC → `missedEvaluation: true` is set, never acted on → the bot stays stale until the NEXT day's 14:00 UTC scheduled brief (~22 hours of stale state).
   - Bot crashes during a 5%+ price move → `emergencyTriggers` set, never acted on → bot proceeds blind.
-- **Fix:** After scheduler starts, check `reconciliationFindings.missedEvaluation` and dispatch a catch-up `runScheduledMorningBrief()` (fire-and-forget so health checks aren't blocked). For `emergencyTriggers`: the 5-minute wakeup cycle will catch held-asset moves on its next tick within 5 min, so logged loud but no separate dispatch yet. Asset-level moves on non-held assets need a routing decision — captured as a follow-up note.
+- **Fix:** After scheduler starts, check `reconciliationFindings.missedEvaluation` and dispatch a catch-up `runScheduledMorningBrief()` (fire-and-forget so health checks aren't blocked). For `emergencyTriggers`: the 5-minute wakeup cycle catches held-asset moves on its next tick. Logged loud but no separate dispatch.
+- **Follow-up — RESOLVED as by-design.** Originally noted that "asset-level moves on non-held assets need a routing decision." The only window where `emergencyTriggers` fires without `missedEvaluation` is short downtime that spans a 5%+ move on a non-held asset, with the next 14:00 UTC brief still ahead. The next scheduled brief picks up the move via its normal regime classification, since regime detection is multi-day-timeframe per STRATEGY.md §3.1. Adding an explicit dispatch would risk noise (Sonnet calls every short crash recovery) without clear benefit.
 - **Found by:** Code-reading the reconciliation flow looking for caller-handoff bugs after exhausting the dashboard / control surface bugs.
 
 ### 30. Stop / take-profit / market-exit fills don't close the position record
