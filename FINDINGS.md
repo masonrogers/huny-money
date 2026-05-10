@@ -2,6 +2,26 @@
 
 Two-phase document: (a) the CI pipeline we built and why, (b) every bug it surfaced, plus every bug found by force-iterating the deployed bot afterward. 30 distinct findings as of session 2026-05-10.
 
+## Session 2026-05-10 close-out
+
+After landing the bug-fix wave during the live force-iteration loop, a follow-up sweep closed three remaining items:
+
+- **#27 (convert-to-btc-hold)** — fixed. Inherits #11 + #21 closure shape: aggregates fees via the new helper on close, inserts a `btc_core` position before placing the BTC buy.
+- **#21 / #30 fee-aggregation follow-up** — resolved. New `orders.feesUsd` column. Paper-executor persists fees on every fill (both at-place-time `simulatedFill` and async `processPendingFills`). New `sumFilledOrderFeesForPositionForCurrentMode` helper aggregates fees across all linked orders. Threaded through every close path — `close-all`, `decision-executor` BTC core exit + dca_out drained + alt `handleExit`, `wakeup-cycle` stop/tp/market_exit, `convert-to-btc-hold`. The wakeup-cycle path is canonical (full entry+exit aggregation); the other paths still slightly undercount in paper mode because the just-placed market_exit is `pending` at close time. Live-mode fees await a reconciliation step.
+- **#9 (GitHub Actions versions)** — done. `actions/checkout@v4` → `@v5`, `actions/setup-node@v4` → `@v5`.
+- **Paper-mode `close-all` + `convert-to-btc-hold` null P&L** — fixed. `placeMarketExit` returns a `pending` order in paper mode (and live mode pre-reconciliation), so `result.fillPrice` was undefined and these paths wrote `null` exitPrice / grossPnl / netPnl. The wakeup-cycle close path couldn't fix it later because its status guard sees the row already closed. Both routes now fetch a fresh ticker via `getTickers(uniqueAssets.map(productIdFor))` and use `result.fillPrice ?? result.price ?? tickerMidPrice` as the exitPrice fallback. Phase 1 metrics now compute correctly even when these emergency controls fire.
+
+**Still on the punch list (deliberately deferred):**
+- **#8** — 7 react-hooks/set-state-in-effect warnings, downgraded to warn. Legitimate hydration / clear-on-open patterns.
+- **#12, #13, #14** — documentation drift / one-time data issues. The runtime $10k paper anchor was operator-induced; CLAUDE.md still correctly references the $500 constant.
+- **#29 follow-up** — non-held-asset emergencyTriggers from boot reconciliation are logged-loud only; no separate routing dispatch (held-asset moves are picked up by the wakeup cycle within 5 min).
+- **Live-mode `orders.feesUsd` population** — the new column exists; live executor needs a reconciliation step to write Coinbase fee data. Not urgent until Phase 2 (live trading).
+
+After this sweep: 264 unit tests pass, eslint shows only the 7 warnings noted in #8, lint:queries clean, build OK with stub envs.
+
+A second sweep added the close-all / convert-to-btc-hold ticker-fallback fix (above). Same numbers — typecheck clean, 264 tests pass, lint clean, lint:queries clean.
+
+
 ## Part 0: What we built (CI pipeline design)
 
 **Starting state:** repo had zero CI. All checks lived as manual scripts (`npm run typecheck`, `npm test`, `npm run lint:queries`). They worked but nothing enforced them on pushes/PRs. The `npm run lint` script was silently broken since the Next 16 upgrade — failing with a misleading error message that looked like a path issue, so nobody had run lint in months.
@@ -203,7 +223,8 @@ After CI was wired and the deploy went out, force-iterating the bot in productio
 - **Files:** `src/app/api/controls/close-all/route.ts`, `src/lib/orchestration/decision-executor.ts` (BTC core exit + dca_out drained branches)
 - **Severity:** HIGH for Phase 1 evaluation. Without P&L on closed trades, the dashboard's `closedTradeCount`, `winRate`, `avgWinPct`, `feeDragPct`, and the entire performance retrospective are blank — the operator can't tell if the strategy is working.
 - **Symptom:** After close-all marked the test position closed, `/api/dashboard/positions` showed `exitPrice: None, grossPnl: None, netPnl: None`. CLAUDE.md says "Trade close → compute gross P&L, fees, net P&L, cost basis" but the actual close handlers were just setting `status='closed'` + `exitTime` + `exitReason`.
-- **Fix:** All three close paths now populate `exitPrice` (from the market exit's `fillPrice`), `grossPnlUsd` ((exitPrice − entryPrice) × qty), `feesUsd` (exit-side fees from the order result), and `netPnlUsd` (gross − exit fees). Note: feesUsd here is exit-only — entry-side fees are tracked per-order but not aggregated to the position record. Captured as a known small undercount; can be fixed by querying related orders' fees if it matters for Phase 1 metrics.
+- **Fix:** All three close paths now populate `exitPrice` (from the market exit's `fillPrice`), `grossPnlUsd` ((exitPrice − entryPrice) × qty), `feesUsd`, and `netPnlUsd` (gross − fees).
+- **Follow-up — RESOLVED.** `feesUsd` was originally exit-side only. Closed in a follow-up: schema now has an `orders.feesUsd` column, paper-executor populates it on every fill (both `simulatedFill` and `processPendingFills`), and every close path (`close-all`, `decision-executor` BTC core exit + dca_out drained + alt `handleExit`, `wakeup-cycle` stop/tp/market_exit, `convert-to-btc-hold`) calls `sumFilledOrderFeesForPositionForCurrentMode(positionId)` to aggregate ALL filled-order fees (entry + exit) for the position. `summarizeFilledOrderFees` is unit-tested. Caveat: in paper mode the just-placed market_exit is `pending` until the next 5-min wakeup tick, so its fee is reflected only on the wakeup-cycle close path (the canonical path with synchronous fill data) and is a small undercount on close-all / decision-executor / convert-to-btc-hold paths. Live mode fees aren't populated until reconciliation lands an `updateOrder` with `feesUsd` from Coinbase, which is a separate piece of work for when live trading begins.
 
 ### 22. Brief data package hardcodes positionsValueUsd to 0 — AI sees inflated current_alloc, dca_outs every brief
 - **File:** `src/lib/orchestration/morning-brief.ts` line 95 (now fixed)
@@ -245,14 +266,13 @@ After CI was wired and the deploy went out, force-iterating the bot in productio
 - **Fix:** Refuse re-anchor if open positions exist. Same pattern as toggle-mode's open-position gate. Operator must close-all or reset-paper first. Returns HTTP 409 with actionable error.
 - **Why missed:** No test exercises re-anchor with positions held — only with the clean post-reset state.
 
-### 27. (DEFERRED) convert-to-btc-hold inherits bugs #11 + #21 (no position record on buy + no P&L on close)
+### 27. convert-to-btc-hold inherits bugs #11 + #21 (no position record on buy + no P&L on close)
 - **File:** `src/app/api/controls/convert-to-btc-hold/route.ts`
 - **Severity:** Medium-low. This is the §4.4 honesty-check fallback used at most once in the bot's lifetime, when the operator decides the strategy has no edge. Emergency endpoint — the bot is being shut down via this control regardless.
 - **Bugs:**
   1. Closes positions with `status='closed' + exitTime + exitReason` only — no exitPrice, grossPnl, fees, netPnl. Same as #21 in close-all (now fixed).
   2. Calls `executor.placeDcaLimitBuy("BTC", ...)` directly to buy BTC with cash, bypassing the decision-executor that creates the `btc_core` position record. Same root cause as #11. Result: a BTC purchase with no `positions` row to back it.
-- **Why deferred:** This control is fired at most once and immediately followed by `phase=halted` + `paused=true`. The bookkeeping inconsistency exists for one transition then the bot stops. Lower priority than fixing the long-term-test surfaces.
-- **If you ever actually use convert-to-btc-hold,** be aware the resulting state will show a phantom BTC purchase with no associated position record. The cash-flow math is correct (the buy goes through orders → cash deducted via `paperCashFlowsFromDb`); only the position-side bookkeeping is missing.
+- **Status — FIXED.** Close path now mirrors close-all: aggregates fees via `sumFilledOrderFeesForPositionForCurrentMode`, populates exitPrice / grossPnl / feesUsd / netPnl. BTC buy path now inserts a `btc_core` position row first and threads `relatedPositionId` into `placeDcaLimitBuy`, so the resulting state has a real position backing the buy. Emergency endpoint is still emergency (one-shot, halts), but if it ever fires it now leaves clean books.
 
 ### 28. Failed morning brief blanks Sonnet visibility + dashboard "today" view for ~24h
 - **Files:** `src/lib/orchestration/sonnet-checkpoint.ts`, `src/lib/orchestration/wakeup-cycle.ts` (`runSonnetForWakeup`), `src/app/api/dashboard/today/route.ts`
@@ -278,7 +298,8 @@ After CI was wired and the deploy went out, force-iterating the bot in productio
 - **Effect:** An alt position whose stop fires has its sell order filled (cash credited via paperCashFlowsFromDb), but the `positions` row stays `status='open'` with original quantity. Next morning brief computes equity = cash + (full alt position at current price), inflated by the alt's mark-to-market value. Next decision is made against fictional holdings.
 - **Why undetected so far:** The bot has never held an alt position in any session. Only BTC core positions exist (which have no stop per §3.7). The TODO would have detonated the first time an alt entry happened and its stop fired.
 - **Found by:** Audit of "premature decoupling" patterns after #29 — looking for "we leave X to the caller / next pass / reconciliation" comments where the caller / next pass / reconciliation doesn't actually do it.
-- **Fix:** Look up the order via `orderByCoinbaseIdForCurrentMode(fill.coinbaseOrderId)`, get its `relatedPositionId`, fetch the position via `positionByIdForCurrentMode`, mark it closed with proper exitPrice + grossPnl + netPnl. Status guard ensures we don't double-close. Same exit-fees caveat as #21 (orders schema has no feesUsd column; gross == net for now, can be backfilled if Phase 1 metrics need it).
+- **Fix:** Look up the order via `orderByCoinbaseIdForCurrentMode(fill.coinbaseOrderId)`, get its `relatedPositionId`, fetch the position via `positionByIdForCurrentMode`, mark it closed with proper exitPrice + grossPnl + netPnl. Status guard ensures we don't double-close.
+- **Follow-up — RESOLVED.** Originally noted that `gross == net` because the orders schema had no `feesUsd` column. That column now exists; this path aggregates ALL fees for the position via `sumFilledOrderFeesForPositionForCurrentMode`. Because the just-filled exit row has its `feesUsd` persisted by `processPendingFills` BEFORE the close runs, this path captures both entry and exit fees correctly — it is the canonical close path with full fee accuracy.
 
 ## Stylistic findings (downgraded to warning)
 
@@ -292,7 +313,7 @@ After CI was wired and the deploy went out, force-iterating the bot in productio
 
 ### 9. `actions/checkout@v4` and `actions/setup-node@v4` use Node 20
 - GitHub will force them to Node 24 on June 2 2026 and remove Node 20 from runners on Sep 16 2026.
-- Trivial to bump to `@v5` whenever they release. Not urgent.
+- **Status — DONE.** Both bumped to `@v5` in `.github/workflows/ci.yml` (5 occurrences for checkout, 5 for setup-node).
 
 ---
 

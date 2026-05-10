@@ -4,7 +4,10 @@ import {
   openPositionsForCurrentMode,
   updatePosition,
 } from "@/lib/db/queries/positions";
-import { filledSellQtyByPositionForCurrentMode } from "@/lib/db/queries/orders";
+import {
+  filledSellQtyByPositionForCurrentMode,
+  sumFilledOrderFeesForPositionForCurrentMode,
+} from "@/lib/db/queries/orders";
 import { getExecutor } from "@/lib/execution";
 import type { OrderExecutor } from "@/lib/execution/interface";
 import { altSizing, btcCoreSizing } from "@/lib/risk/position-sizing";
@@ -677,7 +680,12 @@ async function executeBtcCoreAction(
       // dashboard's closed-trade metrics aren't all-null.
       if (existingBtcCore) {
         const entryPrice = parseFloat(existingBtcCore.entryPrice);
-        const exitFees = order.feesUsd ?? 0;
+        // Aggregate fees across ALL filled orders linked to the position
+        // (entry-side DCA fees + any prior partial sells + this exit if it
+        // already filled). In paper mode the market_exit just placed is
+        // still pending, so its fee isn't included yet — small undercount
+        // matching the wakeup-cycle path's behavior.
+        const totalFees = await sumFilledOrderFeesForPositionForCurrentMode(existingBtcCore.id);
         if (decision.action === "exit") {
           const fullQty = parseFloat(existingBtcCore.quantity);
           const grossPnl = (btcPrice - entryPrice) * fullQty;
@@ -687,8 +695,8 @@ async function executeBtcCoreAction(
             exitTime: new Date(),
             exitReason: `regime=${regime} exit`,
             grossPnlUsd: grossPnl.toString(),
-            feesUsd: exitFees.toString(),
-            netPnlUsd: (grossPnl - exitFees).toString(),
+            feesUsd: totalFees.toString(),
+            netPnlUsd: (grossPnl - totalFees).toString(),
           });
         } else {
           const oldQty = parseFloat(existingBtcCore.quantity);
@@ -702,8 +710,8 @@ async function executeBtcCoreAction(
               exitTime: new Date(),
               exitReason: `regime=${regime} dca_out drained`,
               grossPnlUsd: grossPnl.toString(),
-              feesUsd: exitFees.toString(),
-              netPnlUsd: (grossPnl - exitFees).toString(),
+              feesUsd: totalFees.toString(),
+              netPnlUsd: (grossPnl - totalFees).toString(),
             });
           } else {
             // Entry price is unchanged on partial sell — represents the
@@ -874,12 +882,23 @@ async function handleExit(
     relatedPositionId: position.id,
   });
   // Mark the position closed immediately so subsequent briefs don't re-act
-  // on a "still open" row. Reconciliation will populate exit_price + P&L
-  // when the fill lands.
+  // on a "still open" row. Populate exit_price + P&L from the brief's price
+  // snapshot (the wakeup-cycle close path will not pick up this position
+  // because its status guard skips already-closed rows). Aggregate fees
+  // across all linked orders; the just-placed market_exit may still be
+  // pending in paper mode, so its fee won't be reflected — same caveat as
+  // close-all and the BTC core exit path.
+  const entryPrice = parseFloat(position.entryPrice);
+  const grossPnl = (price - entryPrice) * remainingQty;
+  const totalFees = await sumFilledOrderFeesForPositionForCurrentMode(position.id);
   await updatePosition(position.id, {
     status: "closed",
     exitTime: new Date(),
     exitReason: `morning_brief_exit: ${action.reasoning.slice(0, 200)}`,
+    exitPrice: price.toString(),
+    grossPnlUsd: grossPnl.toString(),
+    feesUsd: totalFees.toString(),
+    netPnlUsd: (grossPnl - totalFees).toString(),
   });
   await logAltPositionAction(ctx, position, action, {
     order: order.coinbaseOrderId,

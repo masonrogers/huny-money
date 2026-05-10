@@ -2,7 +2,10 @@ import { stateRead, stateWriter, priceSnapshotWriter } from "@/lib/db/utils";
 import { setCurrentMode } from "@/lib/mode";
 import { getExecutor } from "@/lib/execution";
 import { openPositionsForCurrentMode, positionByIdForCurrentMode, updatePosition } from "@/lib/db/queries/positions";
-import { orderByCoinbaseIdForCurrentMode } from "@/lib/db/queries/orders";
+import {
+  orderByCoinbaseIdForCurrentMode,
+  sumFilledOrderFeesForPositionForCurrentMode,
+} from "@/lib/db/queries/orders";
 import { activeTriggersAt } from "@/lib/db/queries/triggers";
 import { evaluationsByCallTypeSince } from "@/lib/db/queries/evaluations";
 import { getTickers } from "@/lib/coinbase";
@@ -135,12 +138,11 @@ async function runWakeupCycleImpl(): Promise<WakeupCycleResult> {
               const entryPrice = parseFloat(pos.entryPrice);
               const qty = parseFloat(pos.quantity);
               const grossPnl = (fill.fillPrice - entryPrice) * qty;
-              // orders schema has no feesUsd column; exit fees aren't
-              // persisted at fill time. Net = gross here (small undercount,
-              // same caveat as the close-all path in #21). Adding a feesUsd
-              // column to orders is a follow-up if Phase 1 metrics need it.
-              const exitFees = 0;
-              const netPnl = grossPnl - exitFees;
+              // Aggregate ALL fees for the position (entry + exit). The
+              // exit fill row was just persisted by processPendingFills
+              // with feesUsd populated, so the sum captures both sides.
+              const totalFees = await sumFilledOrderFeesForPositionForCurrentMode(pos.id);
+              const netPnl = grossPnl - totalFees;
               const exitReason =
                 fill.type === "stop_limit"
                   ? "stop_filled"
@@ -153,7 +155,7 @@ async function runWakeupCycleImpl(): Promise<WakeupCycleResult> {
                 exitReason,
                 exitPrice: fill.fillPrice.toString(),
                 grossPnlUsd: grossPnl.toString(),
-                feesUsd: exitFees.toString(),
+                feesUsd: totalFees.toString(),
                 netPnlUsd: netPnl.toString(),
               });
               log.info("Position closed via fill detected in wakeup", {

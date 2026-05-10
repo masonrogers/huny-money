@@ -264,6 +264,7 @@ export class PaperExecutor implements OrderExecutor {
           fillPrice: fillPrice.toString(),
           fillQuantity: quantity.toString(),
           filledAt: new Date(),
+          feesUsd: feeUsd.toString(),
         });
         if (filled) {
           fills.push({
@@ -330,6 +331,7 @@ export class PaperExecutor implements OrderExecutor {
       filledAt: now,
       fillPrice: spec.price.toString(),
       fillQuantity: spec.quantity.toString(),
+      feesUsd: feeUsd.toString(),
       paperMode: true,
     });
 

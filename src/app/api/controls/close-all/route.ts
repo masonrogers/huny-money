@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { getExecutor } from "@/lib/execution";
 import { openPositionsForCurrentMode, updatePosition } from "@/lib/db/queries/positions";
+import { sumFilledOrderFeesForPositionForCurrentMode } from "@/lib/db/queries/orders";
 import { errorLogger, appDecisionLogger } from "@/lib/db/utils";
+import { getTickers } from "@/lib/coinbase";
+import { productIdFor } from "@/lib/strategy/constants";
 import { log } from "@/lib/logger";
 
 /**
@@ -34,6 +37,22 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, closed: 0, message: "No open positions" });
     }
 
+    // Fetch a current ticker for each unique asset so we have an exitPrice
+    // even when placeMarketExit returns `pending` (paper mode fills on the
+    // next wakeup tick; live mode fills server-side). Without this fallback,
+    // close-all would write null exitPrice / grossPnl / netPnl in paper
+    // mode — then the wakeup-cycle close path skips the row because its
+    // status guard sees `closed`, leaving Phase 1 metrics permanently blank.
+    const uniqueAssets = Array.from(new Set(open.map((p) => p.asset)));
+    let tickers: Record<string, { midPrice: number }> = {};
+    try {
+      tickers = await getTickers(uniqueAssets.map(productIdFor));
+    } catch (err) {
+      log.warn("close-all: ticker fetch failed; P&L will be null for closes that lack a fill price", {
+        error: (err as Error).message,
+      });
+    }
+
     const closed: string[] = [];
     const failed: string[] = [];
 
@@ -43,27 +62,25 @@ export async function POST(request: Request) {
         const result = await executor.placeMarketExit(pos.asset, qty, {
           relatedPositionId: pos.id,
         });
-        // Populate exitPrice + grossPnl so the dashboard / Phase 1 criteria
-        // (closedTradeCount, fee drag) compute correctly. Fees paid in this
-        // exit are captured via result.feesUsd; entry-side fees are not
-        // tracked per-position here, so feesUsd reflects exit-only — a
-        // small undercount that's a separate, lower-priority fix.
-        // Market exits in paper mode return fillPrice; live executor's
-        // placeMarketExit also returns fillPrice on the synchronous
-        // response. If neither is set (unexpected), skip P&L computation
-        // rather than write a wrong number.
-        const exitPrice = result.fillPrice ?? result.price ?? null;
+        // Populate exitPrice + P&L so the dashboard / Phase 1 criteria
+        // (closedTradeCount, fee drag) compute correctly. Aggregate fees
+        // across ALL filled orders linked to this position so net = gross −
+        // (entry fees + exit fees). The market_exit may still be `pending`
+        // (paper mode fills it on the next wakeup tick; live mode fills
+        // server-side), so the exit fee may not yet be reflected.
+        const tickerPrice = tickers[productIdFor(pos.asset)]?.midPrice ?? null;
+        const exitPrice = result.fillPrice ?? result.price ?? tickerPrice;
         const entryPrice = parseFloat(pos.entryPrice);
         const grossPnlUsd = exitPrice != null ? (exitPrice - entryPrice) * qty : null;
-        const exitFees = result.feesUsd ?? 0;
-        const netPnlUsd = grossPnlUsd != null ? grossPnlUsd - exitFees : null;
+        const totalFees = await sumFilledOrderFeesForPositionForCurrentMode(pos.id);
+        const netPnlUsd = grossPnlUsd != null ? grossPnlUsd - totalFees : null;
         await updatePosition(pos.id, {
           status: "closed",
           exitTime: new Date(),
           exitReason: "operator_close_all",
           exitPrice: exitPrice != null ? exitPrice.toString() : null,
           grossPnlUsd: grossPnlUsd != null ? grossPnlUsd.toString() : null,
-          feesUsd: exitFees.toString(),
+          feesUsd: totalFees.toString(),
           netPnlUsd: netPnlUsd != null ? netPnlUsd.toString() : null,
         });
         closed.push(pos.id);

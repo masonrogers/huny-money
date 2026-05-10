@@ -1,8 +1,14 @@
 import { NextResponse } from "next/server";
 import { stateWriter, errorLogger, appDecisionLogger } from "@/lib/db/utils";
 import { getExecutor } from "@/lib/execution";
-import { openPositionsForCurrentMode, updatePosition } from "@/lib/db/queries/positions";
-import { getTicker } from "@/lib/coinbase";
+import {
+  openPositionsForCurrentMode,
+  insertPosition,
+  updatePosition,
+} from "@/lib/db/queries/positions";
+import { sumFilledOrderFeesForPositionForCurrentMode } from "@/lib/db/queries/orders";
+import { getTicker, getTickers } from "@/lib/coinbase";
+import { productIdFor, STRATEGY_VERSION } from "@/lib/strategy/constants";
 import { log } from "@/lib/logger";
 
 /**
@@ -42,17 +48,42 @@ export async function POST(request: Request) {
 
     const executor = getExecutor();
 
-    // 1. Close all open positions
+    // 1. Close all open positions with proper P&L. Same approach as
+    //    close-all: aggregate fees across linked orders, fall back to a
+    //    fresh ticker fetch when placeMarketExit returns `pending` (paper
+    //    mode + live pre-reconciliation) so P&L isn't null.
     const open = await openPositionsForCurrentMode();
+    const uniqueAssets = Array.from(new Set(open.map((p) => p.asset)));
+    let closeTickers: Record<string, { midPrice: number }> = {};
+    if (uniqueAssets.length > 0) {
+      try {
+        closeTickers = await getTickers(uniqueAssets.map(productIdFor));
+      } catch (err) {
+        log.warn("convert-to-btc-hold: ticker fetch failed; closes may have null P&L", {
+          error: (err as Error).message,
+        });
+      }
+    }
     for (const pos of open) {
       try {
-        await executor.placeMarketExit(pos.asset, parseFloat(pos.quantity), {
+        const qty = parseFloat(pos.quantity);
+        const result = await executor.placeMarketExit(pos.asset, qty, {
           relatedPositionId: pos.id,
         });
+        const tickerPrice = closeTickers[productIdFor(pos.asset)]?.midPrice ?? null;
+        const exitPrice = result.fillPrice ?? result.price ?? tickerPrice;
+        const entryPrice = parseFloat(pos.entryPrice);
+        const grossPnlUsd = exitPrice != null ? (exitPrice - entryPrice) * qty : null;
+        const totalFees = await sumFilledOrderFeesForPositionForCurrentMode(pos.id);
+        const netPnlUsd = grossPnlUsd != null ? grossPnlUsd - totalFees : null;
         await updatePosition(pos.id, {
           status: "closed",
           exitTime: new Date(),
           exitReason: "convert_to_btc_core_hold",
+          exitPrice: exitPrice != null ? exitPrice.toString() : null,
+          grossPnlUsd: grossPnlUsd != null ? grossPnlUsd.toString() : null,
+          feesUsd: totalFees.toString(),
+          netPnlUsd: netPnlUsd != null ? netPnlUsd.toString() : null,
         });
       } catch (err) {
         log.error("Failed to close position during BTC core hold conversion", {
@@ -68,15 +99,44 @@ export async function POST(request: Request) {
     //    USD+USDC balances). Using getAllBalances directly would route
     //    paper-mode conversions through real exchange balances and diverge
     //    from the paper accounting.
-    let btcBuyResult: { quantity: number; price: number } | null = null;
+    let btcBuyResult: { quantity: number; price: number; positionId?: string } | null = null;
     let cashAvailable = 0;
     try {
       cashAvailable = await executor.getCashBalanceUsd();
       const ticker = await getTicker("BTC-USD");
       if (cashAvailable > 50) {
         const btcQty = (cashAvailable / ticker.midPrice) * 0.999; // 0.1% buffer for fees
-        await executor.placeDcaLimitBuy("BTC", ticker.midPrice, btcQty);
-        btcBuyResult = { quantity: btcQty, price: ticker.midPrice };
+        // Insert the btc_core position record FIRST so the order can link
+        // to it via relatedPositionId. Same shape as decision-executor's
+        // dca_in path. All prior positions were closed in step 1, so any
+        // existing btc_core was already drained — always insert fresh here.
+        const inserted = await insertPosition({
+          asset: "BTC",
+          type: "btc_core",
+          status: "open",
+          direction: "long",
+          entryPrice: ticker.midPrice.toString(),
+          quantity: btcQty.toString(),
+          stopPrice: null, // BTC core has no trailing stop per STRATEGY.md §3.7
+          targetPrice: null,
+          convictionAtEntry: null,
+          catalyst: "convert_to_btc_core_hold",
+          thesis:
+            "Operator-triggered honesty-check fallback per STRATEGY.md §4.4. " +
+            "Bot is being halted; this position holds the residual BTC.",
+          entryTime: new Date(),
+          strategyVersion: STRATEGY_VERSION,
+          regimeAtEntry: null,
+          paperMode: executor.mode === "paper",
+        });
+        await executor.placeDcaLimitBuy("BTC", ticker.midPrice, btcQty, {
+          relatedPositionId: inserted.id,
+        });
+        btcBuyResult = {
+          quantity: btcQty,
+          price: ticker.midPrice,
+          positionId: inserted.id,
+        };
       } else {
         log.warn("Convert-to-BTC: skipping BTC buy — cash below $50 floor", {
           cashAvailable,

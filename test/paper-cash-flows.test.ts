@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   summarizePaperCashFlows,
   summarizeFilledSellQtyByPosition,
+  summarizeFilledOrderFees,
 } from "@/lib/db/queries/orders";
 import type { Order } from "@/lib/db/schema";
 
@@ -189,5 +190,44 @@ describe("summarizeFilledSellQtyByPosition", () => {
     ];
     const map = summarizeFilledSellQtyByPosition(rows);
     expect(map.get("p1")).toBeCloseTo(2.5, 8);
+  });
+});
+
+describe("summarizeFilledOrderFees", () => {
+  it("returns 0 on empty input", () => {
+    expect(summarizeFilledOrderFees([])).toBe(0);
+  });
+
+  it("sums feesUsd across filled rows", () => {
+    const rows = [
+      { status: "filled", feesUsd: "0.40" },
+      { status: "filled", feesUsd: "0.60" },
+    ];
+    expect(summarizeFilledOrderFees(rows)).toBeCloseTo(1.0, 8);
+  });
+
+  it("ignores non-filled rows", () => {
+    const rows = [
+      { status: "pending", feesUsd: "0.40" },
+      { status: "cancelled", feesUsd: "0.50" },
+      { status: "filled", feesUsd: "0.60" },
+    ];
+    expect(summarizeFilledOrderFees(rows)).toBeCloseTo(0.6, 8);
+  });
+
+  it("ignores rows with null feesUsd (e.g., live pending fills not yet reconciled)", () => {
+    const rows = [
+      { status: "filled", feesUsd: null },
+      { status: "filled", feesUsd: "0.50" },
+    ];
+    expect(summarizeFilledOrderFees(rows)).toBeCloseTo(0.5, 8);
+  });
+
+  it("ignores non-finite fees", () => {
+    const rows = [
+      { status: "filled", feesUsd: "not-a-number" },
+      { status: "filled", feesUsd: "1.25" },
+    ];
+    expect(summarizeFilledOrderFees(rows)).toBeCloseTo(1.25, 8);
   });
 });

@@ -161,6 +161,40 @@ export function summarizePaperCashFlows(rows: readonly Order[]): PaperCashFlows 
   return { outflow, inflow };
 }
 
+/**
+ * Pure summarizer: sum of feesUsd across filled orders.
+ * Exported for unit testing — production callers should use
+ * {@link sumFilledOrderFeesForPositionForCurrentMode}.
+ */
+export function summarizeFilledOrderFees(
+  rows: ReadonlyArray<{ status: string; feesUsd: string | null }>,
+): number {
+  let total = 0;
+  for (const o of rows) {
+    if (o.status !== "filled") continue;
+    if (o.feesUsd == null) continue;
+    const f = Number(o.feesUsd);
+    if (Number.isFinite(f)) total += f;
+  }
+  return total;
+}
+
+/**
+ * Sum of feesUsd across filled orders linked to a position. Used when closing
+ * a position to compute net P&L (gross − ALL fees, both entry and exit).
+ *
+ * Returns 0 if the position has no filled orders or no fees recorded — that
+ * matches the "small undercount" caveat called out in FINDINGS #21/#30 for
+ * paths where fees aren't persisted yet (e.g., live mode pending fills, or
+ * paper mode close-all where the market_exit hasn't been processed yet).
+ */
+export async function sumFilledOrderFeesForPositionForCurrentMode(
+  positionId: string,
+): Promise<number> {
+  const rows = await ordersForPositionForCurrentMode(positionId);
+  return summarizeFilledOrderFees(rows);
+}
+
 /** DB-backed wrapper. Reads every filled paper order. */
 export async function paperCashFlowsFromDb(): Promise<PaperCashFlows> {
   const rows = await db

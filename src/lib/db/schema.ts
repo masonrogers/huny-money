@@ -167,6 +167,7 @@ export const orders = pgTable(
     filledAt: timestamp("filled_at", { withTimezone: true }),
     fillPrice: numeric("fill_price", { precision: 20, scale: 8 }),
     fillQuantity: numeric("fill_quantity", { precision: 20, scale: 8 }),
+    feesUsd: numeric("fees_usd", { precision: 20, scale: 8 }),
     cancelReason: text("cancel_reason"),
     paperMode: boolean("paper_mode").notNull(),
   },
