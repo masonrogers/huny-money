@@ -9,12 +9,16 @@ import { formatUsd, formatPct, formatRelativeTime } from "@/lib/utils/format";
 import { Activity, ArrowDownUp, Bot, Layers, TrendingUp, Wallet } from "lucide-react";
 import type { OverviewPayload } from "@/app/api/dashboard/overview/route";
 import type { EquityCurvePayload } from "@/app/api/dashboard/equity-curve/route";
+import type { WalletPayload } from "@/app/api/dashboard/wallet/route";
 
 export default function OverviewPage() {
   const { data, isLoading } = useApi<OverviewPayload>("/api/dashboard/overview", {
     refreshInterval: 30_000,
   });
   const { data: curve } = useApi<EquityCurvePayload>("/api/dashboard/equity-curve?days=30", {
+    refreshInterval: 60_000,
+  });
+  const { data: wallet } = useApi<WalletPayload>("/api/dashboard/wallet", {
     refreshInterval: 60_000,
   });
 
@@ -61,6 +65,8 @@ export default function OverviewPage() {
           deltaTone={data && data.apiSpend.pctOfCap > 80 ? "danger" : "muted"}
         />
       </div>
+
+      <CoinbaseWalletCard wallet={wallet} />
 
       <Card>
         <CardHeader>
@@ -150,6 +156,95 @@ export default function OverviewPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+function CoinbaseWalletCard({ wallet }: { wallet: WalletPayload | undefined }) {
+  const cb = wallet?.coinbase;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Wallet className="size-4 text-[var(--color-text-muted)]" />
+          Coinbase wallet
+          <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-[var(--color-border)] text-[var(--color-text-muted)]">
+            Real · informational
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {!cb ? (
+          <EmptyState title="Loading…" description="Reading Coinbase balances." />
+        ) : !cb.available ? (
+          <EmptyState
+            icon={<Wallet />}
+            title="Wallet snapshot unavailable"
+            description={
+              cb.error ?? "Coinbase API didn't respond. The header retries every 60s."
+            }
+          />
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-baseline gap-3 flex-wrap">
+              <span className="text-2xl font-semibold tnum">
+                {formatUsd(cb.totalUsd ?? 0)}
+              </span>
+              <span className="text-xs text-[var(--color-text-muted)]">
+                total · cash {formatUsd(cb.cashUsd ?? 0)} · {cb.holdings.length}{" "}
+                asset{cb.holdings.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            {cb.holdings.length > 0 && (
+              <div className="overflow-x-auto -mx-1">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs uppercase tracking-wider text-[var(--color-text-muted)]">
+                      <th className="text-left font-medium px-2 py-1.5">Asset</th>
+                      <th className="text-right font-medium px-2 py-1.5">Quantity</th>
+                      <th className="text-right font-medium px-2 py-1.5">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cb.holdings
+                      .slice()
+                      .sort((a, b) => b.valueUsd - a.valueUsd)
+                      .map((h) => (
+                        <tr
+                          key={h.asset}
+                          className="border-t border-[var(--color-border)]"
+                        >
+                          <td className="px-2 py-1.5 font-medium">{h.asset}</td>
+                          <td className="px-2 py-1.5 text-right tnum text-[var(--color-text-secondary)]">
+                            {h.quantity.toLocaleString(undefined, {
+                              maximumFractionDigits: 8,
+                            })}
+                          </td>
+                          <td className="px-2 py-1.5 text-right tnum">
+                            {formatUsd(h.valueUsd)}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="text-xs text-[var(--color-text-faint)] leading-relaxed">
+              These are your real Coinbase balances. The bot in paper mode does
+              <strong> not </strong>
+              touch this — paper accounting runs on{" "}
+              {wallet.paper.startingCapitalUsd != null
+                ? `$${wallet.paper.startingCapitalUsd.toFixed(2)} of synthetic dollars`
+                : "synthetic dollars"}
+              . Manage the paper balance on the{" "}
+              <a href="/controls" className="text-[var(--color-accent)] underline">
+                Controls
+              </a>{" "}
+              page.
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
