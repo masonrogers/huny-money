@@ -159,10 +159,15 @@ describe.skipIf(!integrationEnabled)(
       expect(afterFirst).toHaveLength(1);
       const positionId = afterFirst[0]!.id;
 
-      // Bump price and run another dca_in (target 70% from 50% baseline → +20% delta).
+      // Bump price + flip regime to bull so the sizing cap rises to 70% of
+      // account ($7,000); current BTC core is $5,000 → +$2,000 delta. Without
+      // the regime change the chop sizing cap of $5,000 == current → no order
+      // placed, and we wouldn't actually exercise the existingBtcCore branch.
       mockState.prices = { BTC: 82_000 };
       await executeBriefDecisions(
         makeBrief({
+          regime: "bull",
+          regime_evidence: "bull regime evidence",
           btc_core_decision: {
             current_alloc_pct: 50,
             target_alloc_pct: 70,
