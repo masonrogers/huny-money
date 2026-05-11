@@ -11,11 +11,11 @@ Autonomous crypto trading bot. **v3 is deployed and live in paper mode** at http
 - [`STRATEGY.md`](./STRATEGY.md) — the trading strategy and architecture spec (v3.0, regime + cycle)
 - [`BUILD_PLAN.md`](./BUILD_PLAN.md) — sequenced implementation phases
 - [`CLAUDE.md`](./CLAUDE.md) — operational reference for the AI agent: architecture, gotchas, controls, status
-- [`FINDINGS.md`](./FINDINGS.md) — bug log from the 2026-05-10 force-iteration sweep (30 findings, all closed)
+- [`FINDINGS.md`](./FINDINGS.md) — bug log from the 2026-05-10 force-iteration sweep + 2026-05-11 second-test sweep (33 findings, all closed)
 
 ## Status
 
-**v3 LIVE in paper mode** at https://huny-money-mfiyo.ondigitalocean.app. Phase 10 (60-day paper observation window) ready to begin. All 30 findings from the original CI rollout and force-iteration sweep are closed (see `FINDINGS.md`). The v1 swing-trading implementation is preserved on the [`archive/v1`](https://github.com/masonrogers/huny-money/tree/archive/v1) branch.
+**v3 LIVE in paper mode** at https://huny-money-mfiyo.ondigitalocean.app. Phase 10 (60-day paper observation window) ready to begin. **All 33 findings closed across two sessions** — 30 from the original CI + force-iteration sweep 2026-05-10, then 3 more (#31/#32/#33) from a second-test regression sweep 2026-05-11. The second sweep also added a paper-mode-only `/api/controls/un-halt` recovery endpoint + dashboard card, and integration test coverage for every time-domain code path that had never been exercised end-to-end (two-tranche entry ladder, trail-stop ratchet through the full +25/+50/+75/+100% schedule, 60-day BTC underperformance gate). Planned next: historical backtest harness to validate the strategy beats BTC hold over a 60-day window of real market data before fully committing to live Phase 10. The v1 swing-trading implementation is preserved on the [`archive/v1`](https://github.com/masonrogers/huny-money/tree/archive/v1) branch.
 
 ## Stack
 
@@ -34,8 +34,8 @@ Dashboard at http://localhost:3000.
 ## Tests
 
 ```bash
-npm test                          # 264 unit tests (no DB)
-RUN_INTEGRATION=1 npm test        # +35 integration tests (needs Postgres at $DATABASE_URL)
+npm test                          # 270 unit tests (no DB)
+RUN_INTEGRATION=1 npm test        # +47 integration tests (needs Postgres at $DATABASE_URL)
 RUN_LIVE_SMOKE=1 npm test -- coinbase-smoke   # 3 live Coinbase auth + ticker tests (local only)
 bash scripts/lint-queries.sh      # CI lint: positions/orders + coinbase/orders isolation
 npx tsc --noEmit                  # typecheck

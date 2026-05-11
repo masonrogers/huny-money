@@ -253,20 +253,21 @@ The deploy command runs `drizzle-kit push --force` from inside the DO sandbox (w
 - `POST /api/controls/reset-paper` — typed-phrase confirm "reset paper progress". Wipes every paper position + paper order + queued tranches + cooldowns + auto-pause reason; reseeds synthetic capital to operator-supplied amount (default `PAPER_STARTING_CAPITAL_USD = 500`, but the live paper account currently anchors at $10k unless re-anchored). Audit trail (evaluations, app_decisions, history) preserved. **Order-of-deletes matters** (orders → positions, FK constraint).
 - `POST /api/controls/re-anchor-capital` — paper mode: takes operator-supplied `startingCapitalUsd`, no real-wallet read. Live mode: snapshots real Coinbase. Resets equity curve / peak / BTC anchor for the current mode. Does NOT touch positions/orders. **Refuses with 409 if any positions are open** — would otherwise corrupt cash + positions-value bookkeeping. Operator must close-all or reset-paper first.
 - `POST /api/controls/pause` — toggles `trading_paused`. On manual resume, also clears `trading_paused_reason` + `trading_paused_by_btc_underperf_gate` so stale auto-pause text doesn't linger.
+- `POST /api/controls/un-halt` — typed-phrase confirm "resume trading". Paper-mode only (live mode keeps the documented manual-DB irreversibility for convert-to-btc-hold per STRATEGY.md §4.4). Restores `state.phase = "paper"` from `halted`, clears `trading_paused` + auto-pause provenance keys, idempotent (no-ops when phase isn't halted). Does NOT touch positions/orders — use reset-paper for that. Dashboard renders a prominent card on `/controls` only when `state.phase === "halted"`.
 - `deleteAllPositionsForCurrentMode()` / `deleteAllOrdersForCurrentMode()` — only callable from paper mode (assert mode at runtime, on top of the lint rule that confines positions/orders mutations to their query files).
 
 ## Status
 
 **Deployed and live** at https://huny-money-mfiyo.ondigitalocean.app in paper mode. Boot succeeds; scheduler ticks; cycle range job runs; wakeup cycle refreshes equity snapshot every 5 min; activity tracker populates; morning brief executes end-to-end with proper position bookkeeping.
 
-**Bug log:** see `FINDINGS.md`. **As of session 2026-05-10: all 30 findings closed** — 24 code bugs fixed and verified live; 6 categorized as not-a-bug (false alarm, downgraded warnings, doc/data drift, process notes). Two additional issues surfaced and resolved during the session: drizzle-kit 0.28 vs pg18 incompatibility (fixed by upgrading to 0.31.10 + drizzle-orm 0.45.2) and pre-existing prod `positions` table drift (`asset`/`direction`/`entry_price`/`entry_time` were nullable, now NOT NULL).
+**Bug log:** see `FINDINGS.md`. **As of session 2026-05-11: all 33 findings closed** — 27 code bugs fixed (24 from 2026-05-10 + 3 from the 2026-05-11 second-test sweep: #31 status payload field rename, #32 days_in_regime UTC-day anchoring, #33 BTC core order→position linkage for fee aggregation); 6 categorized as not-a-bug. The 2026-05-11 sweep also added the `POST /api/controls/un-halt` endpoint + dashboard card to recover from halted state without DB intervention. Two earlier issues from 2026-05-10 also resolved: drizzle-kit 0.28 vs pg18 incompatibility (fixed by upgrading to 0.31.10 + drizzle-orm 0.45.2) and pre-existing prod `positions` table drift (`asset`/`direction`/`entry_price`/`entry_time` were nullable, now NOT NULL).
 
-**Latest verified deploy:** commit `d3eabc6` (drizzle-kit safety net stripped). Prod boot log shows `[i] No changes detected` from drizzle-kit — the clean idempotent state.
+**Latest verified deploy:** commit `8df57d0` (un-halt endpoint + UI). Local main is at `aa852b7` — test-only delta over the deployed code (integration tests for entry-ladder tranche-2, trail-stop ratchet, 60d underperf gate). Prod boot log shows `[i] No changes detected` from drizzle-kit — the clean idempotent state.
 
 **Stack snapshot:**
 - drizzle-kit 0.31.10, drizzle-orm 0.45.2 (verified against pg18)
 - DO managed Postgres cluster `db-postgresql-nyc3-00644` runs **Postgres 18** (this matters — see gotcha #18)
-- 264 unit tests + 35 integration tests = 299 passing (8 new integration tests added this session for paper-executor fees, wakeup-cycle close, convert-to-btc-hold)
+- **270 unit + 47 integration = 317 passing.** New tests in the 2026-05-11 cycle: `test/regime-day-state.test.ts` (6 cases — #32 UTC-day logic), `test/integration/btc-core-order-position-link.test.ts` (3 cases — #33 dca_in/two-tranche/exit linkage), `test/integration/time-domain.test.ts` (9 cases — entry-ladder tranche-2 fire/drift/not-due, trail-stop ratchet through full schedule + no-downgrade, 60d underperf gate boundary conditions)
 - All 6 CI jobs green on latest SHA
 
 **Confirmed working live (post-2026-05-10 session):**
@@ -283,35 +284,41 @@ The deploy command runs `drizzle-kit push --force` from inside the DO sandbox (w
 - Boot reconciliation now dispatches catch-up brief on `missedEvaluation` (was logged-only)
 - Equity curve anchored from most recent reset/re-anchor — no more stale pre-reset history
 - `orders.feesUsd` column persisted on every paper-executor fill; `sumFilledOrderFeesForPositionForCurrentMode` aggregates entry+exit fees on every close path (close-all, decision-executor BTC + alt exits, wakeup-cycle, convert-to-btc-hold)
-- `convert-to-btc-hold` now closes prior positions with full P&L AND inserts a `btc_core` position row backing the BTC buy (FINDINGS #27)
+- `convert-to-btc-hold` now closes prior positions with full P&L AND inserts a `btc_core` position row backing the BTC buy (FINDINGS #27); `POST /api/controls/un-halt` provides a paper-mode-only recovery path back from the halted phase
+- BTC core entry/exit orders now correctly carry `related_position_id` so `sumFilledOrderFeesForPositionForCurrentMode` aggregates fees on every close (#33 fix verified live: close-all now returns `feesUsd ≈ $30` on a $5k BTC trade where pre-fix returned $0)
+- `days_in_current_regime` now anchors to a `days_in_regime_last_utc_day` state key so force-iteration within one UTC day doesn't inflate the counter (#32 fix verified live: same-day briefs no-op the counter)
 
-**Not yet exercised live (depend on AI judgment + market dynamics, expected to surface during Phase 10):**
-- `dca_out` / `exit` (need regime change to bull or bear)
-- Alt entry (need an AI candidate with conviction ≥ 70 + the 7 entry conditions in §3.4)
-- Two-tranche entry ladder firing tranche 2 ~12h after tranche 1
-- Trail-stop ratchet at +25 / +50 / +75 / +100% (needs profitable alt)
-- Wake-up triggers actually firing (need >5% moves on held assets, news matches, or stop fills)
-- Sonnet escalation to Opus (needs a wake-up worth escalating)
-- 60-day BTC underperformance auto-pause gate (needs 60 days of equity history)
-- Live-mode flip (intentionally not exercised — Phase 1 paper window first)
-- `convert-to-btc-hold` endpoint (now book-clean per #27 fix; remains an emergency one-shot — fired at most once in the bot's lifetime)
-- Live-mode `orders.feesUsd` population (column exists; live-executor needs a reconciliation step to write Coinbase fees on fill — deferred until Phase 2)
+**Not yet exercised live, but now covered by integration tests** (verifies the code path; only live market motion can verify the AI's behavior in real conditions):
+- Two-tranche entry ladder firing tranche 2 — `test/integration/time-domain.test.ts` clock-mocks the schedule
+- Trail-stop ratchet through +25/+50/+75/+100% — `test/integration/time-domain.test.ts` walks the full schedule + verifies no-downgrade
+- 60-day BTC underperformance auto-pause gate — `test/integration/time-domain.test.ts` covers boundary conditions (trips at 60 days, refuses at 59, refuses on positive delta, already-paused handling)
+
+**Not yet exercised live AND not yet integration-tested (Phase 10 / Phase 2 surface):**
+- `dca_out` / `exit` triggered by AI regime change (BTC core path is integration-tested for the executor side; the AI deciding it is what's untested)
+- Alt entry with all 7 §3.4 conditions met (needs real candidate)
+- Wake-up triggers firing — `position_move`, `news_keyword` (stop_fill is integration-tested in `wakeup-cycle-close.test.ts`)
+- Sonnet escalation to Opus
+- Live-mode flip (Phase 1 first)
+- Live-mode `orders.feesUsd` population (live executor needs reconciliation step — deferred until Phase 2)
 
 **CI:** GitHub Actions runs typecheck / lint / lint:queries / unit / build / integration-against-ephemeral-Postgres on every push/PR. **Zero GH secrets required**: deploys go via DO auto-deploy from main, with manual fallback `bash scripts/deploy.sh` reading `~/Desktop/.nibbles-secrets`. DO auto-deploy is flaky; verify each push actually deployed via the DO console or by checking commit SHA on a deployment.
 
 ## What's Next
 
-1. **Read `FINDINGS.md`** if you weren't part of the 2026-05-10 session — the "Session close-out" at the top is the chronological digest. Most of those bugs would have detonated weeks into Phase 10 with no obvious cause.
-2. **Start Phase 10 paper window cleanly:** `POST /api/controls/reset-paper` with the desired starting capital, then let the 14:00 UTC scheduled brief drive cadence. Force briefs are fine for spot-checking but use sparingly so the AI's regime-day counter + equity curve stay coherent.
-3. Operator reads ≥ 10 morning briefs and judges them coherent.
-4. At 60 days, evaluate Phase 1 advance criteria per `STRATEGY.md §6.3`.
+1. **Read `FINDINGS.md`** if you weren't part of the 2026-05-10 / 2026-05-11 sessions — the "Session close-out" + "Session 2026-05-11" digests at the top are chronological. Most of those bugs would have detonated weeks into Phase 10 with no obvious cause.
+2. **Decided next work: historical backtest harness (Option C).** Deferred to a fresh conversation 2026-05-11. The plan is documented in `memory/project_next_backtest.md`. Goal: validate the strategy beats BTC hold over a 60-day window of real historical OHLCV before committing to live Phase 10. Cost ~$25-40 per run; ~3-4h harness build. **DB isolation is critical — backtest writes must NOT touch the production audit trail** (use a separate docker pg18 instance).
+3. **Phase 10 cadence starts on its own** at the next 14:00 UTC scheduled brief regardless of whether the backtest is built first. Force briefs are fine for spot-checking but use sparingly so the AI's regime-day counter + equity curve stay coherent. (Phase 10 will run alongside backtest work, not block it.)
+4. Operator reads ≥ 10 morning briefs and judges them coherent.
+5. At 60 days, evaluate Phase 1 advance criteria per `STRATEGY.md §6.3`.
 
 **Forward-looking work (no urgency, not blocking Phase 10):**
 - **Live-mode `orders.feesUsd` population.** Column exists, paper executor populates, live executor's `getOrderStatus`/reconciliation path doesn't yet write `feesUsd` from Coinbase's response. Needed before Phase 2 (live trading) for accurate net P&L on live trades. ~30 lines of work in `live-executor.ts` + a corresponding integration test.
 - **`STRATEGY.md §3.6` BTC core multi-day DCA splitting.** `decision-executor.ts` line ~602 has a comment: tranches are placed at full delta in one shot rather than split across `tranches_planned` days. Low priority — works correctly for now, just not as smoothly DCA'd as the spec calls for.
+- **Transactional boundary on multi-write blocks** (e.g., morning-brief's regime-persistence block: 4 sequential `stateWriter` calls). Each individual `stateWriter` is already transactional, but the sequence isn't. A process crash mid-sequence would leave inconsistent state. Considered + deferred 2026-05-11 — Node single-process makes the race rare; high-impact bug would require a separate batch-writer helper.
 
 **Won't-fix / by-design (don't bring these back up as bugs):**
 - 7 `react-hooks/set-state-in-effect` warnings — legitimate hydration / clear-on-open patterns, downgraded to warn in `eslint.config.mjs`. Re-evaluate only if one ever surfaces as a real bug.
 - Non-held-asset `emergencyTriggers` on boot recovery (FINDINGS #29) — the next scheduled morning brief picks up the move via regime classification. Adding explicit dispatch would risk Sonnet noise on every short crash recovery.
+- Convert-to-btc-hold in LIVE mode is intentionally irreversible without DB access. The new `/api/controls/un-halt` endpoint is paper-mode-only by design — live mode keeps the documented manual-DB recovery path per STRATEGY.md §4.4.
 
-The bot is functionally complete per spec. It now needs to earn the right to trade — first by being coherent in paper, then by beating BTC.
+The bot is functionally complete per spec and now has integration coverage on every code path reachable from this machine. It needs two more things to earn the right to trade live: a historical backtest (Option C, planned) showing it beats BTC over 60 days, and then a real Phase 10 paper window confirming the backtest result holds on fresh market data.
