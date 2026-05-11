@@ -77,11 +77,11 @@ async function main() {
       console.log(
         `[migrate-v1-to-v3] v3 schema is settled (${rows.length} tables, state.value is nullable). Skipping drop.`,
       );
-      // Apply idempotent additive column migrations before returning so the
-      // running app sees the new shape even when drizzle-kit's push plan
-      // chokes on unrelated drift (we hit a 42P16 dropconstraint_internal
-      // failure on a feesUsd column add — drizzle-kit generated a redefine
-      // plan that tried to drop the orders_pkey, which Postgres refuses).
+      // Emergency-migrations escape hatch. drizzle-kit 0.31+ handles pg18
+      // named NOT NULL constraints correctly so push reliably applies the
+      // schema.ts diff again. Normally this is a no-op. Append to the
+      // migrations array inside applyAdditiveMigrations ONLY when
+      // drizzle-kit can't apply something we need landed before npm start.
       await applyAdditiveMigrations(sql);
       return;
     }
@@ -106,70 +106,30 @@ async function main() {
 }
 
 /**
- * Idempotent additive column migrations applied on every v3-settled deploy
- * BEFORE drizzle-kit push runs. Each statement uses IF NOT EXISTS so it's
- * safe to re-run. If drizzle-kit's diff plan can't apply the column add for
- * any reason (e.g., the 42P16 redefine bug we hit on the feesUsd add), the
- * raw ALTER here ensures boot still finds the column.
+ * Emergency-migrations escape hatch.
  *
- * To add a new column to v3:
- *   1. Update the schema in `src/lib/db/schema.ts` as usual
- *   2. Add the equivalent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...` here
- *   3. Deploy
+ * Pre-drizzle-kit-0.31, this layer was a critical safety net: drizzle-kit
+ * push was silently failing on prod every deploy because of a pg18
+ * named-NOT-NULL bug (CLAUDE.md gotcha #18), so any schema change had to
+ * be applied here too or it'd never land. drizzle-kit 0.31.7+ fixes that
+ * bug — push is reliable again and schema.ts is once more the single
+ * source of truth for schema state.
+ *
+ * The function stays as a no-op escape hatch. Append to `migrations` ONLY
+ * if a future drizzle-kit version regresses (or a managed-Postgres major
+ * version bump breaks compatibility again) AND a schema change MUST land
+ * before `npm start` runs. Each statement should be idempotent
+ * (`IF NOT EXISTS`, `SET NOT NULL` is no-op when already, etc.).
  */
 async function applyAdditiveMigrations(sql: ReturnType<typeof postgres>): Promise<void> {
-  const migrations: Array<{ name: string; statement: string }> = [
-    {
-      name: "orders.fees_usd",
-      statement: `ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "fees_usd" numeric(20, 8)`,
-    },
-    // Fix the pre-existing nullable-but-should-be-NOT-NULL drift on the
-    // positions table (see CLAUDE.md gotcha #18). drizzle-kit would emit
-    // these SET NOT NULL itself but gets killed by the pg18 named-NOT-NULL
-    // 42P16 first. UPDATE coalesces sit before each SET NOT NULL so the
-    // ALTER doesn't fail on existing null rows. SET NOT NULL is idempotent
-    // (no-op when already NOT NULL).
-    {
-      name: "positions.direction (default 'long', then SET NOT NULL)",
-      statement: `
-        UPDATE "positions" SET "direction" = 'long' WHERE "direction" IS NULL;
-        ALTER TABLE "positions" ALTER COLUMN "direction" SET DEFAULT 'long';
-        ALTER TABLE "positions" ALTER COLUMN "direction" SET NOT NULL;
-      `,
-    },
-    {
-      name: "positions.asset (SET NOT NULL)",
-      // No safe coalesce default — asset null is genuinely bad data. The
-      // ALTER will fail if any row has null; that's a signal to investigate
-      // (a code path inserted a position without an asset). Surface loudly.
-      statement: `ALTER TABLE "positions" ALTER COLUMN "asset" SET NOT NULL`,
-    },
-    {
-      name: "positions.entry_price (SET NOT NULL)",
-      statement: `ALTER TABLE "positions" ALTER COLUMN "entry_price" SET NOT NULL`,
-    },
-    {
-      name: "positions.entry_time (SET NOT NULL)",
-      statement: `ALTER TABLE "positions" ALTER COLUMN "entry_time" SET NOT NULL`,
-    },
-  ];
+  const migrations: Array<{ name: string; statement: string }> = [];
   for (const m of migrations) {
     try {
       await sql.unsafe(m.statement);
-      console.log(`[migrate-v1-to-v3] applied additive migration: ${m.name}`);
+      console.log(`[migrate-v1-to-v3] applied emergency migration: ${m.name}`);
     } catch (err) {
-      // For the positions NOT NULL set, log and continue instead of throwing —
-      // we don't want a failed drift fix to brick the deploy. Boot reads
-      // these columns assuming non-null already; if there's bad data the
-      // app will surface it via runtime errors, which is the same outcome
-      // as bricking the deploy but without taking the bot down.
-      const msg = (err as Error).message;
-      if (m.name.startsWith("positions.")) {
-        console.error(`[migrate-v1-to-v3] positions drift fix failed (${m.name}): ${msg} — continuing`);
-      } else {
-        console.error(`[migrate-v1-to-v3] additive migration failed (${m.name}): ${msg}`);
-        throw err;
-      }
+      console.error(`[migrate-v1-to-v3] emergency migration failed (${m.name}):`, (err as Error).message);
+      throw err;
     }
   }
 }
