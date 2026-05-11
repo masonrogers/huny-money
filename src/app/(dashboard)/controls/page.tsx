@@ -15,6 +15,7 @@ import {
   Loader2,
   Pause,
   Play,
+  PlayCircle,
   RefreshCw,
   Repeat,
   Wallet,
@@ -32,6 +33,7 @@ export default function ControlsPage() {
   const [toggleOpen, setToggleOpen] = useState(false);
   const [reAnchorOpen, setReAnchorOpen] = useState(false);
   const [resetPaperOpen, setResetPaperOpen] = useState(false);
+  const [unHaltOpen, setUnHaltOpen] = useState(false);
 
   const paused = data?.paused ?? false;
   const mode = data?.mode ?? "paper";
@@ -102,6 +104,31 @@ export default function ControlsPage() {
         title="Controls"
         description="Manual interventions. Each action is logged to app_decisions for the audit trail."
       />
+
+      {data?.phase === "halted" && (
+        <Card className="border-[var(--color-warning)]/50 bg-[var(--color-warning)]/5">
+          <CardHeader>
+            <CardTitle>Bot is HALTED — resume trading?</CardTitle>
+            <CardDescription>
+              <code>state.phase</code> is <strong>halted</strong>. The decision-executor&apos;s
+              preflight short-circuits on this, so the bot will not place any new orders
+              until phase is restored to <strong>paper</strong>. This is the supervised
+              undo path for <code>convert-to-btc-hold</code>. Positions/orders are
+              untouched — use Reset paper for that. Paper-mode only.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              variant="primary"
+              onClick={() => setUnHaltOpen(true)}
+              disabled={busy != null}
+            >
+              <PlayCircle />
+              Un-halt and resume trading…
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>
@@ -458,6 +485,27 @@ export default function ControlsPage() {
             startingCapitalUsd: n,
           });
         }}
+      />
+
+      <ConfirmDialog
+        open={unHaltOpen}
+        onOpenChange={setUnHaltOpen}
+        title="Un-halt and resume trading?"
+        description={
+          <>
+            Restores <code>state.phase</code> from <strong>halted</strong> back to{" "}
+            <strong>paper</strong> and clears any lingering pause/auto-pause flags. The
+            scheduler will pick up the new phase on its next tick and the
+            decision-executor&apos;s preflight will start allowing trades again. Positions
+            and orders are <strong>not</strong> touched.
+          </>
+        }
+        tone="warning"
+        typedPhrase="resume trading"
+        confirmLabel="Resume trading"
+        onConfirm={async (payload) =>
+          postControl("Un-halt", "/api/controls/un-halt", payload)
+        }
       />
 
       <ConfirmDialog
