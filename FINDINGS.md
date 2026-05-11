@@ -1,6 +1,45 @@
 # CI rollout + first-real-exercise findings
 
-Two-phase document: (a) the CI pipeline we built and why, (b) every bug it surfaced, plus every bug found by force-iterating the deployed bot afterward. 30 distinct findings as of session 2026-05-10. **All 30 are now closed** — 24 code bugs fixed and verified live, 6 categorized as not-a-bug (false alarm, downgraded warnings, doc/data drift, process notes).
+Two-phase document: (a) the CI pipeline we built and why, (b) every bug it surfaced, plus every bug found by force-iterating the deployed bot afterward. 33 distinct findings as of session 2026-05-11 (second-test sweep). **All 33 are now closed** — 27 code bugs fixed (24 verified live in session 2026-05-10 + 3 fixed in session 2026-05-11), 6 categorized as not-a-bug (false alarm, downgraded warnings, doc/data drift, process notes).
+
+## Session 2026-05-11 (second-test regression sweep)
+
+After all 30 prior findings were code-closed, ran a structured 20-minute live regression sweep on the deployed bot. Confirmed every reachable prior fix held; surfaced **3 new findings**. Full test artifact: `test-results/2026-05-11-second-test/report.md` (+ snapshots of every dashboard endpoint at each phase boundary).
+
+### #31. `lastEvalAt` label/value mismatch in status route — FIXED
+- **File:** `src/app/api/dashboard/status/route.ts`
+- **Severity:** LOW (operator UX).
+- **Cause:** Status route read `state.next_eval_at` (the *next* scheduled brief time) and returned it as `lastEvalAt` in the payload. Dashboard header therefore showed a future timestamp labeled "last eval" after every successful brief.
+- **Fix:** Renamed the payload field to `nextEvalAt` with a docstring pointing readers at `system.lastSuccessfulActions.lastOpusCallAt` if they want the actual last execution time. No frontend consumed the old name (verified by grep), so this is a pure interface fix.
+- **Found by:** Second-test baseline snapshot showed `lastEvalAt: 2026-05-11T14:00` while `system.lastOpusCallAt: 2026-05-10T15:36`. Reading the route revealed the mismatch.
+
+### #32. `days_in_current_regime` increments per brief, not per UTC day — FIXED
+- **File:** `src/lib/orchestration/morning-brief.ts` (regime persistence block)
+- **Severity:** HIGH. STRATEGY.md uses days-in-regime as part of multi-day regime conviction; an inflated counter makes the AI think the current regime is older / more confirmed than it is.
+- **Symptom in live test:** 4 force briefs in a single UTC day pushed the counter 12 → 13 → 14 → 15 → 16. Under the natural 14:00 UTC scheduled cadence this never bit, because one brief per UTC day is correct by accident. Under force-iteration (the operator's de-facto debug cadence), the bug compounds.
+- **Cause:** `value: changed ? 1 : prevDays + 1` — unconditional increment on same-regime no-op briefs.
+- **Fix:** Extracted a pure helper `nextRegimeDayState` that anchors the increment to a new `days_in_regime_last_utc_day` state key: increment only when regime changed OR the recorded UTC-day key differs from today's UTC day. Same-day reruns no-op.
+- **Test:** `test/regime-day-state.test.ts` — 6 unit tests covering first-ever brief, regime change, same-regime new-day, same-regime same-day (no-op), legacy boot with no anchor key, and the live-observed three-back-to-back-force-briefs scenario.
+- **Found by:** Reading the regime-counter values across the four-brief sequence in second-test snapshots.
+
+### #33. BTC core entry/exit orders missing `relatedPositionId` — fees silently lost — FIXED
+- **File:** `src/lib/orchestration/decision-executor.ts` (`executeBtcCoreDecision` — dca_in path ~line 611 + dca_out/exit path ~line 691)
+- **Severity:** HIGH for Phase 1 evaluation. The dashboard's `feeDragPct`, `winRate`, and net P&L gating ALL depend on `sumFilledOrderFeesForPositionForCurrentMode`, which sums fees across orders linked to a position via `related_position_id`. With BTC core entries unlinked, every close on a BTC core trade reported `feesUsd: 0` and `netPnl == grossPnl` — Phase 1 metrics rosier than reality in the most dangerous direction.
+- **Symptom in live test:** close-all on a $5,000 BTC core position returned `feesUsd: 0` despite cash being correctly debited $30 by the paper-executor fill (DO log: `feeUsd: 30`). Convert-to-btc-hold showed the same gap. The fee data was IN the orders table (paperCashFlowsFromDb saw it); the position-to-order link was the missing piece.
+- **Cause:** Two separate call sites both omitted the option:
+  1. `dca_in` path placed the order BEFORE the position was inserted/updated, so no positionId was available to thread into `placeDcaLimitBuy`.
+  2. `dca_out`/`exit` path had `existingBtcCore?.id` available but the original code didn't pass an options object to `placeMarketExit`.
+- **Fix:**
+  - `dca_in`: post-hoc `updateOrder(order.orderId, { relatedPositionId: positionId })` after the position is inserted/updated. Smallest blast radius — no reordering of the create-position vs place-order steps. Covers both branches (existing btc_core + first-ever btc_core).
+  - `dca_out`/`exit`: pass `{ relatedPositionId: existingBtcCore?.id }` to `placeMarketExit`.
+  - Imported `updateOrder` (was previously not imported by this file).
+- **Test:** `test/integration/btc-core-order-position-link.test.ts` — three integration tests pinning (a) single-tranche dca_in linkage + fee aggregation, (b) two-tranche dca_in (both entry orders link to the same weighted-avg position), (c) exit path linkage.
+- **Audit:** Grepped every `place*` call across `src/` for missing options. All other call sites (entry-ladder tranche-2, reconciliation missing-stop placement, close-all, convert-to-btc-hold, all alt paths) were already correct.
+- **Found by:** Second-test close-all probe — output had `feesUsd: 0` and `netPnl == grossPnl` when both should have been ~$30. Tracing the path back to `placeDcaLimitBuy(... )` with no options arg exposed the bug.
+
+**Test totals after this session:** 270 unit + 38 integration = 308 passing. New tests:
+- `test/regime-day-state.test.ts` (6 cases) — #32
+- `test/integration/btc-core-order-position-link.test.ts` (3 cases) — #33
 
 ## Session 2026-05-10 close-out (final state)
 

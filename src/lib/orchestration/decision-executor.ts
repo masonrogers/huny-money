@@ -7,6 +7,7 @@ import {
 import {
   filledSellQtyByPositionForCurrentMode,
   sumFilledOrderFeesForPositionForCurrentMode,
+  updateOrder,
 } from "@/lib/db/queries/orders";
 import { getExecutor } from "@/lib/execution";
 import type { OrderExecutor } from "@/lib/execution/interface";
@@ -647,6 +648,15 @@ async function executeBtcCoreAction(
         positionId = inserted.id;
       }
 
+      // Link the just-placed order back to the position so fee aggregation
+      // works on close. The order was placed BEFORE the position id was
+      // known (unlike the alt path, which inserts the position first and
+      // threads relatedPositionId into the order place call). Without this
+      // post-hoc link, sumFilledOrderFeesForPositionForCurrentMode returns
+      // 0 for BTC core trades — silently zeroing the fee component of net
+      // P&L on every close path (FINDINGS.md #33).
+      await updateOrder(order.orderId, { relatedPositionId: positionId });
+
       await logBtcCoreDecision(ctx, decision, regime, {
         order: order.coinbaseOrderId,
         deltaUsd,
@@ -673,7 +683,14 @@ async function executeBtcCoreAction(
         };
       }
       const qty = quantityFor(sellUsd, btcPrice);
-      const order = await executor.placeMarketExit("BTC", qty);
+      // Pass relatedPositionId so the exit-side order is linked to the
+      // position and its fee shows up in sumFilledOrderFeesForPositionForCurrentMode
+      // (FINDINGS.md #33). On the paper-mode close path the market_exit
+      // fills synchronously enough at place time that the link is also
+      // what makes the wakeup-cycle close path account fees correctly.
+      const order = await executor.placeMarketExit("BTC", qty, {
+        relatedPositionId: existingBtcCore?.id,
+      });
 
       // Update the btc_core position record. Decrement qty (or close on exit).
       // On close (exit OR dca_out drained), populate gross / net P&L so the

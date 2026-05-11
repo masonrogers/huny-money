@@ -58,6 +58,42 @@ export interface ScheduledBriefError {
 
 const SECONDS_PER_DAY = 86_400;
 
+/**
+ * Pure helper: what should `days_in_current_regime` be after this brief?
+ *
+ * Rules:
+ *   - Regime changed → reset to 1, record today as the last increment day.
+ *   - Same regime, same UTC day as the last increment → no change.
+ *   - Same regime, new UTC day (or no prior increment day recorded) → +1.
+ *
+ * Anchoring to a UTC-day key (not the brief itself) means force-iteration
+ * within a single calendar day doesn't inflate the counter (FINDINGS.md #32).
+ * Exported for unit testing — the caller persists the resulting state via
+ * stateWriter.
+ */
+export function nextRegimeDayState(input: {
+  newRegime: "bull" | "chop" | "bear";
+  prevRegime: "bull" | "chop" | "bear" | null;
+  prevDays: number;
+  lastIncrementUtcDay: string | null;
+  todayUtcDay: string;
+}): {
+  changed: boolean;
+  shouldIncrement: boolean;
+  daysAfter: number;
+} {
+  const { newRegime, prevRegime, prevDays, lastIncrementUtcDay, todayUtcDay } =
+    input;
+  const changed = prevRegime !== newRegime;
+  const shouldIncrement = changed || lastIncrementUtcDay !== todayUtcDay;
+  const daysAfter = changed
+    ? 1
+    : shouldIncrement
+      ? prevDays + 1
+      : prevDays;
+  return { changed, shouldIncrement, daysAfter };
+}
+
 export async function runScheduledMorningBrief(): Promise<
   ScheduledBriefResult | ScheduledBriefError
 > {
@@ -213,11 +249,27 @@ async function runScheduledMorningBriefImpl(): Promise<
     // a regime, days_in_current_regime never increments, and tomorrow's brief
     // gets `currentRegime: null` again — the central regime-aware premise of
     // the strategy is broken (FINDINGS.md #15).
+    //
+    // days_in_current_regime is calendar-day-anchored, not per-brief: under
+    // the natural one-brief-per-UTC-day cadence the two coincide, but force-
+    // iteration would inflate the counter by one per force-brief otherwise
+    // (FINDINGS.md #32). nextRegimeDayState encapsulates the rule so the test
+    // can verify it without running the full brief pipeline.
     {
       const newRegime = result.brief.regime;
       const prevRegime = await stateRead<"bull" | "chop" | "bear">("current_regime");
       const prevDays = (await stateRead<number>("days_in_current_regime")) ?? 0;
-      const changed = prevRegime !== newRegime;
+      const lastIncrementUtcDay = await stateRead<string>(
+        "days_in_regime_last_utc_day",
+      );
+      const todayUtcDay = new Date().toISOString().slice(0, 10);
+      const next = nextRegimeDayState({
+        newRegime,
+        prevRegime: prevRegime ?? null,
+        prevDays,
+        lastIncrementUtcDay: lastIncrementUtcDay ?? null,
+        todayUtcDay,
+      });
 
       await stateWriter({
         key: "current_regime",
@@ -225,13 +277,21 @@ async function runScheduledMorningBriefImpl(): Promise<
         changedBy: "orchestration.morning-brief",
         relatedEvalId: result.evaluationId,
       });
-      await stateWriter({
-        key: "days_in_current_regime",
-        value: changed ? 1 : prevDays + 1,
-        changedBy: "orchestration.morning-brief",
-        relatedEvalId: result.evaluationId,
-      });
-      if (changed) {
+      if (next.shouldIncrement) {
+        await stateWriter({
+          key: "days_in_current_regime",
+          value: next.daysAfter,
+          changedBy: "orchestration.morning-brief",
+          relatedEvalId: result.evaluationId,
+        });
+        await stateWriter({
+          key: "days_in_regime_last_utc_day",
+          value: todayUtcDay,
+          changedBy: "orchestration.morning-brief",
+          relatedEvalId: result.evaluationId,
+        });
+      }
+      if (next.changed) {
         await stateWriter({
           key: "last_regime_change_at",
           value: new Date().toISOString(),

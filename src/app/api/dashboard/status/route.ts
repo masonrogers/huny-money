@@ -15,7 +15,14 @@ export interface DashboardStatusPayload {
   /** Synthetic paper starting capital — never reflects real Coinbase balance. */
   paperStartingCapitalUsd: number | null;
   lastBootAt: string | null;
-  lastEvalAt: string | null;
+  /**
+   * The NEXT scheduled morning brief time (UTC). Sourced from
+   * `state.next_eval_at`, which `runScheduledMorningBrief` writes after each
+   * successful brief to schedule the next 14:00 UTC fire. NOT the time of the
+   * last evaluation — for that, read `lastOpusCallAt` from /api/dashboard/system
+   * (FINDINGS.md #31).
+   */
+  nextEvalAt: string | null;
   dbReady: boolean;
 }
 
@@ -33,7 +40,7 @@ export async function GET() {
       pausedByBtcUnderperfGate: false,
       paperStartingCapitalUsd: null,
       lastBootAt: null,
-      lastEvalAt: null,
+      nextEvalAt: null,
       dbReady: false,
     },
     async () => {
@@ -74,7 +81,7 @@ export async function GET() {
         pausedByBtcUnderperfGate: pausedByGate ?? false,
         paperStartingCapitalUsd: paperStartingCapital ?? null,
         lastBootAt: lastBoot,
-        lastEvalAt: nextEval,
+        nextEvalAt: nextEval,
         dbReady: true,
       };
     },

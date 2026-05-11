@@ -48,5 +48,9 @@ drizzle/meta
 # playwright mcp artifacts
 .playwright-mcp/
 
+# operator's local test-sweep artifacts (snapshots + cookies + raw curl output).
+# Keep findings + reports in FINDINGS.md, which IS tracked.
+test-results/
+
 # claude code per-developer config
 .claude/settings.local.json
