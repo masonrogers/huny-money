@@ -1,6 +1,6 @@
 # Huny Money — v3
 
-Autonomous crypto trading bot. Phases 1–9 of the v3 rebuild are code-complete.
+Autonomous crypto trading bot. **v3 is deployed and live in paper mode** at https://huny-money-mfiyo.ondigitalocean.app.
 
 **Strategy:** Regime-aware BTC core with selective alt cycle entries. The bot defaults to BTC (the structural winner in crypto), goes to cash in confirmed bears (the largest single source of alpha vs. BTC), and adds satellite cycle-trading positions on a curated watchlist of mid-cap alts when conditions favor it.
 
@@ -10,14 +10,16 @@ Autonomous crypto trading bot. Phases 1–9 of the v3 rebuild are code-complete.
 
 - [`STRATEGY.md`](./STRATEGY.md) — the trading strategy and architecture spec (v3.0, regime + cycle)
 - [`BUILD_PLAN.md`](./BUILD_PLAN.md) — sequenced implementation phases
+- [`CLAUDE.md`](./CLAUDE.md) — operational reference for the AI agent: architecture, gotchas, controls, status
+- [`FINDINGS.md`](./FINDINGS.md) — bug log from the 2026-05-10 force-iteration sweep (30 findings, all closed)
 
 ## Status
 
-Phases 1–9 code complete. The v1 swing-trading implementation is preserved on the [`archive/v1`](https://github.com/masonrogers/huny-money/tree/archive/v1) branch and is currently the deployed version on DigitalOcean App Platform.
+**v3 LIVE in paper mode** at https://huny-money-mfiyo.ondigitalocean.app. Phase 10 (60-day paper observation window) ready to begin. All 30 findings from the original CI rollout and force-iteration sweep are closed (see `FINDINGS.md`). The v1 swing-trading implementation is preserved on the [`archive/v1`](https://github.com/masonrogers/huny-money/tree/archive/v1) branch.
 
 ## Stack
 
-Next.js 16 (App Router) · React 19 · TypeScript strict · Tailwind v4 · shadcn/ui · Drizzle ORM · Postgres · Anthropic SDK · Coinbase Advanced Trade REST · DigitalOcean App Platform.
+Next.js 16 (App Router) · React 19 · TypeScript strict · Tailwind v4 · shadcn/ui · Drizzle ORM (drizzle-kit 0.31.10 + drizzle-orm 0.45.2) · Postgres 18 (DO managed) · Anthropic SDK (Opus 4.7 + Sonnet 4.6) · Coinbase Advanced Trade REST · DigitalOcean App Platform.
 
 ## Local development
 
@@ -32,57 +34,49 @@ Dashboard at http://localhost:3000.
 ## Tests
 
 ```bash
-npm test                          # unit + pure tests (no DB)
-RUN_INTEGRATION=1 npm test        # also runs DB integration tests
-RUN_LIVE_SMOKE=1 npm test -- coinbase-smoke   # live Coinbase auth + ticker
+npm test                          # 264 unit tests (no DB)
+RUN_INTEGRATION=1 npm test        # +35 integration tests (needs Postgres at $DATABASE_URL)
+RUN_LIVE_SMOKE=1 npm test -- coinbase-smoke   # 3 live Coinbase auth + ticker tests (local only)
 bash scripts/lint-queries.sh      # CI lint: positions/orders + coinbase/orders isolation
+npx tsc --noEmit                  # typecheck
+npm run lint                      # eslint (7 expected warnings on hydration patterns)
 ```
 
-## Deployment runbook (operator)
-
-The DigitalOcean app is currently pointed at `archive/v1` (the running v1 paper bot). To switch to v3:
+Local integration testing uses an ephemeral postgres container — easiest setup:
 
 ```bash
-# 1. Drop the v1 schema (the new schema replaces it on the next push)
-source .env.local
-psql "$DATABASE_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; \
-                          GRANT ALL ON SCHEMA public TO doadmin; \
-                          GRANT ALL ON SCHEMA public TO public;"
-
-# 2. Push the v3 schema
-npx drizzle-kit push --force
-
-# 3. (Optional) Run the integration test suite locally to verify the schema
-RUN_INTEGRATION=1 npm test
-
-# 4. Update DO app to deploy from main
-source /home/davidr/Desktop/.nibbles-secrets
-APP_ID=e3f67164-bc0f-481e-a17d-cb1a33c3c440
-# Apply the .do/app.yaml in this repo to the live app via the DO API.
-# See ./scripts/deploy.sh (added in Phase 9) or the dashboard.
-
-# 5. Force a deploy
-curl -X POST "https://api.digitalocean.com/v2/apps/$APP_ID/deployments" \
-  -H "Authorization: Bearer $DO_API_KEY_WRITE" \
-  -H "Content-Type: application/json" \
-  -d '{"force_build": true}'
-
-# 6. Tail run logs to verify boot succeeded
-curl -s "https://api.digitalocean.com/v2/apps/$APP_ID/logs?type=RUN&component_name=web&follow=false" \
-  -H "Authorization: Bearer $DO_API_KEY_READONLY" \
-  | python3 -c "import sys,json,urllib.request,gzip; \
-    d=json.load(sys.stdin); url=d.get('live_url') or d.get('historic_urls',[''])[0]; \
-    data=urllib.request.urlopen(url).read(); \
-    print((gzip.decompress(data).decode() if data[:2]==b'\\x1f\\x8b' else data.decode('utf-8','replace')).split(chr(10))[-50:])"
+docker run -d --rm --name huny-test-pg -e POSTGRES_USER=huny -e POSTGRES_PASSWORD=huny \
+  -e POSTGRES_DB=huny_money -p 55432:5432 postgres:16
+DATABASE_URL=postgres://huny:huny@localhost:55432/huny_money npx drizzle-kit push --force
+DATABASE_URL=postgres://huny:huny@localhost:55432/huny_money \
+  COINBASE_API_KEY=stub COINBASE_API_SECRET=stub ANTHROPIC_API_KEY=stub \
+  APP_SECRET=stub_app_secret_at_least_32_bytes_long_for_jwt_signing \
+  ADMIN_PASSWORD=stub CRON_SECRET=stub \
+  RUN_INTEGRATION=1 npm test
+docker stop huny-test-pg
 ```
+
+## Deployment
+
+Auto-deploys from `main` (sometimes flaky — verify with the DO console or via API):
+
+```bash
+bash scripts/deploy.sh   # reads ~/Desktop/.nibbles-secrets, forces a build + tails logs
+```
+
+The DO run_command is `npx tsx scripts/migrate-v1-to-v3.ts && npx drizzle-kit push --force && npm start`. The migrate script handles the legacy v1→v3 schema reset (no-op once v3 is settled — current state) and an emergency-migrations escape hatch (currently empty; see `CLAUDE.md` gotcha #18).
 
 ## Boot sequence
 
 On every server start (per `instrumentation.ts`):
 
-1. Coinbase TRADE-only assertion (refuses to start if withdrawal enabled)
+1. Coinbase TRADE-only assertion (refuses to start if withdrawal enabled — non-negotiable)
 2. First-launch detection — captures starting capital, BTC anchor, default params
-3. Executor factory — reads `state.paper_mode`, constructs the immutable executor
-4. Reconciliation — cross-mode boot rejection, missing-stop placement, missed-eval detection
-5. Clears `state.mode_change_pending` (operator's pending toggle now applied)
-6. Starts the in-process scheduler (Opus morning at 14:00 UTC, Sonnet checks at 06/22 UTC, cycle-range job at 00:00 UTC, wake-up checks every 5 min)
+3. Executor factory — reads `state.paper_mode`, constructs the immutable executor (the executor object IS the mode for the session)
+4. Reconciliation — cross-mode boot rejection, missing-stop placement, missed-eval detection, downtime price-move detection
+5. Clears `state.mode_change_pending` (operator's pending mode toggle now applied)
+6. Starts the in-process scheduler (Opus morning at 14:00 UTC, Sonnet checks at 06:00 + 22:00 UTC, cycle-range job at 00:00 UTC, wake-up checks every 5 min)
+
+## CI
+
+GitHub Actions on every push/PR to `main`: typecheck / lint / lint:queries / unit / build / integration (against a Postgres 16 service container). **Zero secrets required** — deploys go via DO auto-deploy or `scripts/deploy.sh`. Live Coinbase smoke tests are local-only.

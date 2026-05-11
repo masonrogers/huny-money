@@ -259,7 +259,15 @@ The deploy command runs `drizzle-kit push --force` from inside the DO sandbox (w
 
 **Deployed and live** at https://huny-money-mfiyo.ondigitalocean.app in paper mode. Boot succeeds; scheduler ticks; cycle range job runs; wakeup cycle refreshes equity snapshot every 5 min; activity tracker populates; morning brief executes end-to-end with proper position bookkeeping.
 
-**Bug log:** see `FINDINGS.md` at the repo root. As of session 2026-05-10: 30 distinct findings logged. All HIGH/CATASTROPHIC items fixed and verified live across two follow-up sweeps. The bot has materially changed since the original "Phase 9 complete" claim — many paths in that claim were exercised here for the first time and broke. All have entries in `FINDINGS.md` with cause + fix + verification.
+**Bug log:** see `FINDINGS.md`. **As of session 2026-05-10: all 30 findings closed** — 24 code bugs fixed and verified live; 6 categorized as not-a-bug (false alarm, downgraded warnings, doc/data drift, process notes). Two additional issues surfaced and resolved during the session: drizzle-kit 0.28 vs pg18 incompatibility (fixed by upgrading to 0.31.10 + drizzle-orm 0.45.2) and pre-existing prod `positions` table drift (`asset`/`direction`/`entry_price`/`entry_time` were nullable, now NOT NULL).
+
+**Latest verified deploy:** commit `d3eabc6` (drizzle-kit safety net stripped). Prod boot log shows `[i] No changes detected` from drizzle-kit — the clean idempotent state.
+
+**Stack snapshot:**
+- drizzle-kit 0.31.10, drizzle-orm 0.45.2 (verified against pg18)
+- DO managed Postgres cluster `db-postgresql-nyc3-00644` runs **Postgres 18** (this matters — see gotcha #18)
+- 264 unit tests + 35 integration tests = 299 passing (8 new integration tests added this session for paper-executor fees, wakeup-cycle close, convert-to-btc-hold)
+- All 6 CI jobs green on latest SHA
 
 **Confirmed working live (post-2026-05-10 session):**
 - Boot → executor singleton (across Next App Router bundles via globalThis) → scheduler → 60s tick loop
@@ -293,10 +301,17 @@ The deploy command runs `drizzle-kit push --force` from inside the DO sandbox (w
 
 ## What's Next
 
-1. **Read `FINDINGS.md`** if you weren't part of the 2026-05-10 session — most of those bugs would have detonated weeks into Phase 10 with no obvious cause, costing time to diagnose.
-2. **Pull the schema-diagnostic output from the next deploy log** (committed in `147eced`) and identify the prod-DB drift causing drizzle-kit's 42P16 redefine attempts. Once known, fix the schema or add a corrective ALTER and remove the diagnostic. The additive-migrations layer (`applyAdditiveMigrations` in the migrate script) stays regardless — it's belt-and-braces.
-3. **Start Phase 10 paper window cleanly:** `POST /api/controls/reset-paper` with the desired starting capital, then let the 14:00 UTC scheduled brief drive cadence. Force briefs are fine for spot-checking but use sparingly to keep the AI's regime-day counter and equity curve coherent.
-4. Operator reads ≥ 10 morning briefs and judges them coherent.
-5. At 60 days, evaluate Phase 1 advance criteria per `STRATEGY.md §6.3`.
+1. **Read `FINDINGS.md`** if you weren't part of the 2026-05-10 session — the "Session close-out" at the top is the chronological digest. Most of those bugs would have detonated weeks into Phase 10 with no obvious cause.
+2. **Start Phase 10 paper window cleanly:** `POST /api/controls/reset-paper` with the desired starting capital, then let the 14:00 UTC scheduled brief drive cadence. Force briefs are fine for spot-checking but use sparingly so the AI's regime-day counter + equity curve stay coherent.
+3. Operator reads ≥ 10 morning briefs and judges them coherent.
+4. At 60 days, evaluate Phase 1 advance criteria per `STRATEGY.md §6.3`.
 
-The bot is built and now actually works the way the build plan claimed it did. It now needs to earn the right to trade — first by being coherent in paper, then by beating BTC.
+**Forward-looking work (no urgency, not blocking Phase 10):**
+- **Live-mode `orders.feesUsd` population.** Column exists, paper executor populates, live executor's `getOrderStatus`/reconciliation path doesn't yet write `feesUsd` from Coinbase's response. Needed before Phase 2 (live trading) for accurate net P&L on live trades. ~30 lines of work in `live-executor.ts` + a corresponding integration test.
+- **`STRATEGY.md §3.6` BTC core multi-day DCA splitting.** `decision-executor.ts` line ~602 has a comment: tranches are placed at full delta in one shot rather than split across `tranches_planned` days. Low priority — works correctly for now, just not as smoothly DCA'd as the spec calls for.
+
+**Won't-fix / by-design (don't bring these back up as bugs):**
+- 7 `react-hooks/set-state-in-effect` warnings — legitimate hydration / clear-on-open patterns, downgraded to warn in `eslint.config.mjs`. Re-evaluate only if one ever surfaces as a real bug.
+- Non-held-asset `emergencyTriggers` on boot recovery (FINDINGS #29) — the next scheduled morning brief picks up the move via regime classification. Adding explicit dispatch would risk Sonnet noise on every short crash recovery.
+
+The bot is functionally complete per spec. It now needs to earn the right to trade — first by being coherent in paper, then by beating BTC.
