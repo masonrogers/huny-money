@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import { stateWriter } from "@/lib/db/utils";
 import { bootConstructExecutor } from "@/lib/execution";
 import {
@@ -94,7 +95,7 @@ describe.skipIf(!integrationEnabled)(
       const brief = makeBrief();
 
       await executeBriefDecisions(brief, {
-        evaluationId: "eval-dca-in-test",
+        evaluationId: randomUUID(),
         accountValueUsd: 10_000,
         cashUsd: 10_000,
         currentPrices: { BTC: 80_000 },
@@ -128,7 +129,7 @@ describe.skipIf(!integrationEnabled)(
       const { executor } = await bootConstructExecutor();
       // First brief: open BTC core.
       await executeBriefDecisions(makeBrief(), {
-        evaluationId: "eval-dca-in-1",
+        evaluationId: randomUUID(),
         accountValueUsd: 10_000,
         cashUsd: 10_000,
         currentPrices: { BTC: 80_000 },
@@ -153,7 +154,7 @@ describe.skipIf(!integrationEnabled)(
           },
         }),
         {
-          evaluationId: "eval-dca-in-2",
+          evaluationId: randomUUID(),
           accountValueUsd: 10_000,
           cashUsd: 4_970,
           currentPrices: { BTC: 82_000 },
@@ -179,7 +180,7 @@ describe.skipIf(!integrationEnabled)(
       const { executor } = await bootConstructExecutor();
       // Establish a BTC core position via dca_in.
       await executeBriefDecisions(makeBrief(), {
-        evaluationId: "eval-pre-exit",
+        evaluationId: randomUUID(),
         accountValueUsd: 10_000,
         cashUsd: 10_000,
         currentPrices: { BTC: 80_000 },
@@ -204,7 +205,7 @@ describe.skipIf(!integrationEnabled)(
           },
         }),
         {
-          evaluationId: "eval-exit",
+          evaluationId: randomUUID(),
           accountValueUsd: 10_000,
           cashUsd: 4_970,
           currentPrices: { BTC: 80_000 },
