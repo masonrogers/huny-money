@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { randomUUID } from "node:crypto";
 import { stateWriter } from "@/lib/db/utils";
 import { bootConstructExecutor } from "@/lib/execution";
 import {
@@ -7,9 +6,28 @@ import {
   sumFilledOrderFeesForPositionForCurrentMode,
 } from "@/lib/db/queries/orders";
 import { openPositionsForCurrentMode } from "@/lib/db/queries/positions";
+import { insertEvaluation } from "@/lib/db/queries/evaluations";
 import { executeBriefDecisions } from "@/lib/orchestration/decision-executor";
 import type { MorningBrief } from "@/lib/ai/schemas";
+import { STRATEGY_VERSION } from "@/lib/strategy/constants";
 import { integrationEnabled, resetIntegration, teardownIntegration } from "./setup";
+
+/**
+ * Insert a placeholder evaluation row and return its id. The decision executor
+ * threads `ctx.evaluationId` through stateWriter → system_state_history, which
+ * has a FK to evaluations.id, so a string UUID alone isn't enough — the row
+ * must actually exist.
+ */
+async function seedEvaluation(): Promise<string> {
+  const row = await insertEvaluation({
+    model: "claude-opus-4-7",
+    callType: "morning",
+    triggerSource: "scheduled",
+    promptText: "test prompt",
+    strategyVersion: STRATEGY_VERSION,
+  });
+  return row.id;
+}
 
 /**
  * FINDINGS.md #33 — BTC core dca_in and dca_out/exit paths used to place
@@ -95,7 +113,7 @@ describe.skipIf(!integrationEnabled)(
       const brief = makeBrief();
 
       await executeBriefDecisions(brief, {
-        evaluationId: randomUUID(),
+        evaluationId: await seedEvaluation(),
         accountValueUsd: 10_000,
         cashUsd: 10_000,
         currentPrices: { BTC: 80_000 },
@@ -129,7 +147,7 @@ describe.skipIf(!integrationEnabled)(
       const { executor } = await bootConstructExecutor();
       // First brief: open BTC core.
       await executeBriefDecisions(makeBrief(), {
-        evaluationId: randomUUID(),
+        evaluationId: await seedEvaluation(),
         accountValueUsd: 10_000,
         cashUsd: 10_000,
         currentPrices: { BTC: 80_000 },
@@ -154,7 +172,7 @@ describe.skipIf(!integrationEnabled)(
           },
         }),
         {
-          evaluationId: randomUUID(),
+          evaluationId: await seedEvaluation(),
           accountValueUsd: 10_000,
           cashUsd: 4_970,
           currentPrices: { BTC: 82_000 },
@@ -180,7 +198,7 @@ describe.skipIf(!integrationEnabled)(
       const { executor } = await bootConstructExecutor();
       // Establish a BTC core position via dca_in.
       await executeBriefDecisions(makeBrief(), {
-        evaluationId: randomUUID(),
+        evaluationId: await seedEvaluation(),
         accountValueUsd: 10_000,
         cashUsd: 10_000,
         currentPrices: { BTC: 80_000 },
@@ -205,7 +223,7 @@ describe.skipIf(!integrationEnabled)(
           },
         }),
         {
-          evaluationId: randomUUID(),
+          evaluationId: await seedEvaluation(),
           accountValueUsd: 10_000,
           cashUsd: 4_970,
           currentPrices: { BTC: 80_000 },
