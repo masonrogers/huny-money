@@ -41,8 +41,11 @@ async function main() {
     process.exit(1);
   }
 
+  // DO managed Postgres requires SSL; localhost / CI service container does not.
+  // Same pattern as src/lib/db/index.ts (FINDINGS #6).
+  const isLocal = /(?:^|@)(?:localhost|127\.0\.0\.1)(?::|\/)/.test(url);
   const sql = postgres(url, {
-    ssl: "require",
+    ssl: isLocal ? false : "require",
     connect_timeout: 10,
     idle_timeout: 5,
     max: 1,
@@ -120,14 +123,53 @@ async function applyAdditiveMigrations(sql: ReturnType<typeof postgres>): Promis
       name: "orders.fees_usd",
       statement: `ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "fees_usd" numeric(20, 8)`,
     },
+    // Fix the pre-existing nullable-but-should-be-NOT-NULL drift on the
+    // positions table (see CLAUDE.md gotcha #18). drizzle-kit would emit
+    // these SET NOT NULL itself but gets killed by the pg18 named-NOT-NULL
+    // 42P16 first. UPDATE coalesces sit before each SET NOT NULL so the
+    // ALTER doesn't fail on existing null rows. SET NOT NULL is idempotent
+    // (no-op when already NOT NULL).
+    {
+      name: "positions.direction (default 'long', then SET NOT NULL)",
+      statement: `
+        UPDATE "positions" SET "direction" = 'long' WHERE "direction" IS NULL;
+        ALTER TABLE "positions" ALTER COLUMN "direction" SET DEFAULT 'long';
+        ALTER TABLE "positions" ALTER COLUMN "direction" SET NOT NULL;
+      `,
+    },
+    {
+      name: "positions.asset (SET NOT NULL)",
+      // No safe coalesce default — asset null is genuinely bad data. The
+      // ALTER will fail if any row has null; that's a signal to investigate
+      // (a code path inserted a position without an asset). Surface loudly.
+      statement: `ALTER TABLE "positions" ALTER COLUMN "asset" SET NOT NULL`,
+    },
+    {
+      name: "positions.entry_price (SET NOT NULL)",
+      statement: `ALTER TABLE "positions" ALTER COLUMN "entry_price" SET NOT NULL`,
+    },
+    {
+      name: "positions.entry_time (SET NOT NULL)",
+      statement: `ALTER TABLE "positions" ALTER COLUMN "entry_time" SET NOT NULL`,
+    },
   ];
   for (const m of migrations) {
     try {
       await sql.unsafe(m.statement);
       console.log(`[migrate-v1-to-v3] applied additive migration: ${m.name}`);
     } catch (err) {
-      console.error(`[migrate-v1-to-v3] additive migration failed (${m.name}):`, (err as Error).message);
-      throw err;
+      // For the positions NOT NULL set, log and continue instead of throwing —
+      // we don't want a failed drift fix to brick the deploy. Boot reads
+      // these columns assuming non-null already; if there's bad data the
+      // app will surface it via runtime errors, which is the same outcome
+      // as bricking the deploy but without taking the bot down.
+      const msg = (err as Error).message;
+      if (m.name.startsWith("positions.")) {
+        console.error(`[migrate-v1-to-v3] positions drift fix failed (${m.name}): ${msg} — continuing`);
+      } else {
+        console.error(`[migrate-v1-to-v3] additive migration failed (${m.name}): ${msg}`);
+        throw err;
+      }
     }
   }
 }
